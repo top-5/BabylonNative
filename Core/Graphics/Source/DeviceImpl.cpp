@@ -53,7 +53,7 @@ namespace Babylon::Graphics
         // init.resolution
         //
 
-        init.resolution.reset = BGFX_RESET_VSYNC | BGFX_RESET_MAXANISOTROPY | BGFX_RESET_FLIP_AFTER_RENDER;
+        init.resolution.reset = (config.VSync ? BGFX_RESET_VSYNC : 0u) | BGFX_RESET_MAXANISOTROPY | BGFX_RESET_FLIP_AFTER_RENDER;
         init.resolution.maxFrameLatency = 1;
 
         UpdateSize(config.Width, config.Height);

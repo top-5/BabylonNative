@@ -56,6 +56,10 @@ namespace Babylon::Graphics
         // Format to use when creating the depth/stencil texture for the back buffer.
         // Specify DepthStencilFormat::None to not create a depth/stencil texture.
         DepthStencilFormat BackBufferDepthStencilFormat{DepthStencilFormat::Depth24Stencil8};
+
+        // When false, presentation is not synchronized to the display refresh rate.
+        // Set to false for uncapped frame rates (e.g. DLSS benchmarking).
+        bool VSync{true};
     };
 
     class Device;
