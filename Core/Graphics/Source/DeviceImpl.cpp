@@ -106,7 +106,7 @@ namespace Babylon::Graphics
         // init.swapChain
         //
 
-        init.reset = BGFX_RESET_VSYNC | BGFX_RESET_MAXANISOTROPY | BGFX_RESET_FLIP_AFTER_RENDER;
+        init.reset = (config.VSync ? BGFX_RESET_VSYNC : 0u) | BGFX_RESET_MAXANISOTROPY | BGFX_RESET_FLIP_AFTER_RENDER;
         init.swapChain.maxFrameLatency = 1;
 
         UpdateSize(config.Width, config.Height);
