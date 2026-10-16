@@ -125,6 +125,7 @@ namespace Babylon::Embedding
             config.Width = lw;
             config.Height = lh;
             config.MSAASamples = m_runtime.m_options.msaaSamples;
+            config.VSync = m_runtime.m_options.vsync;
 
             m_runtime.m_device.emplace(config);
         }
@@ -171,8 +172,19 @@ namespace Babylon::Embedding
 
         // Babylon's JS render loop runs between Start and Finish, scheduled
         // via DeviceUpdate's SafeTimespanGuarantor onto the JS thread.
+        // A host overlay (ImGui and the like) submits its bgfx draws here, on the
+        // frame thread, into the frame about to be presented.
+        if (m_impl->m_beforePresent)
+        {
+            m_impl->m_beforePresent();
+        }
         impl.m_device->FinishRenderingCurrentFrame();
         impl.m_device->StartRenderingCurrentFrame();
+    }
+
+    void View::SetBeforePresent(std::function<void()> callback)
+    {
+        m_impl->m_beforePresent = std::move(callback);
     }
 
     // Stores the host-supplied size on the ViewImpl, then either pushes

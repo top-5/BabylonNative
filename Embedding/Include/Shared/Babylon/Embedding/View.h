@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Babylon/Graphics/Platform.h>
+#include <functional>
 
 #include <cstdint>
 #include <memory>
@@ -74,6 +75,12 @@ namespace Babylon::Embedding
         // the View converts to logical internally when `units == Physical`.
         // Must be called from the frame thread.
         void Resize(uint32_t width, uint32_t height, CoordinateUnits units);
+
+        // A host overlay (Dear ImGui and the like): called on the frame thread
+        // inside RenderFrame, after Babylon's draws of the frame and before it is
+        // presented, so bgfx submissions made in it land in that frame. Draw into
+        // the device's back buffer (Graphics::DeviceContext::GetBackBufferHandle).
+        void SetBeforePresent(std::function<void()> callback);
 
 #if BABYLON_NATIVE_PLUGIN_NATIVEINPUT
         // Pointer / mouse input forwarding. Host calls these from its event

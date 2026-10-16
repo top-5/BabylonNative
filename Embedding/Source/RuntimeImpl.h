@@ -23,6 +23,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <functional>
 #include <optional>
 #include <utility>
 
@@ -146,6 +147,10 @@ namespace Babylon::Embedding
         // Most recent Resize size, in logical pixels. Empty until the
         // host calls Resize.
         std::optional<std::pair<uint32_t, uint32_t>> m_size;
+
+        // Host overlay draws, run on the frame thread in RenderFrame before the
+        // frame is finished (View::SetBeforePresent).
+        std::function<void()> m_beforePresent;
 
         // Latches true the first time InitializeIfReady succeeds; never
         // flips back. A new ViewImpl is constructed per View attach.

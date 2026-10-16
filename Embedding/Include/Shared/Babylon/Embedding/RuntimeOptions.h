@@ -14,6 +14,8 @@ namespace Babylon::Embedding
         // MSAA sample count for the back buffer. Valid values: 0, 2, 4, 8, 16.
         // Anything else disables MSAA.
         uint8_t msaaSamples{4};
+        // Synchronise presentation with the display refresh (Graphics::Configuration::VSync). Off = uncapped frame rate.
+        bool vsync{true};
 
         // Enable the JavaScript debugger. Only implemented for V8 and Chakra.
         bool enableDebugger{false};
