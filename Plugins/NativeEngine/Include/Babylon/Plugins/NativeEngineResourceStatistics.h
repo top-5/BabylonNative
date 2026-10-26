@@ -31,10 +31,17 @@ namespace Babylon::Plugins::NativeEngine
         ResourceOperationStatistics imageFlip;
         ResourceOperationStatistics formatConvert;
         ResourceOperationStatistics mipGenerate;
+        // Opt-in JS-thread CPU/API wall spans. RAF nests native operations, and
+        // GetReader invokes a JS flush callback; these are not disjoint CPU time.
+        ResourceOperationStatistics commandRead, commandScopeDispatch, commandExecute;
+        ResourceOperationStatistics vertexBufferCreate, indexBufferCreate, vertexBufferRecord, rafCallbacks;
+        bool commandTimingEnabled{};
     };
 
     // Process-lifetime completed counters: no reset. Worker tasks may overlap; totals
     // cannot be summed into loader wall time. Each field is loaded atomically with
     // relaxed ordering, so the snapshot is not a coherent transaction while busy.
     ResourceStatistics BABYLON_API GetResourceStatistics() noexcept;
+    // Configure before runtime creation. Does not reset lifetime counters.
+    void BABYLON_API SetCommandTimingEnabled(bool enabled) noexcept;
 }

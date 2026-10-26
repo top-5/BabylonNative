@@ -66,6 +66,14 @@ int main()
         "unfinished scope fails and a backwards test clock cannot underflow duration");
 
     ResourceCounter parentPreparation, childMip;
+    ResourceCounter explicitlyFinished;
+    {
+        ResourceScope<FakeClock> scope{explicitlyFinished, 0};
+        FakeClock::current += std::chrono::nanoseconds{7}; scope.Succeed(); scope.Finish();
+        FakeClock::current += std::chrono::nanoseconds{50}; scope.Finish();
+    }
+    Require(explicitlyFinished.Snapshot().calls == 1 && explicitlyFinished.Snapshot().totalNs == 7,
+        "explicit timing finish neither extends owner lifetime nor double-counts on destruction");
     FakeClock::current = std::chrono::nanoseconds{0};
     {
         ResourceScope<FakeClock> parent{parentPreparation, 1000};
@@ -138,6 +146,19 @@ int main()
         "reading public snapshots never resets counters");
     Require(replay.imageFlip.totalNs == 44 && replay.formatConvert.failed == 1 && replay.mipGenerate.totalNs == 66,
         "reading public snapshots preserves all nested-span lifetime counters");
+    Require(!Babylon::Plugins::NativeEngine::GetResourceStatistics().commandTimingEnabled,
+        "native command timing defaults off");
+    Babylon::Plugins::NativeEngine::SetCommandTimingEnabled(true);
+    for (auto phase : {ResourcePhase::CommandRead, ResourcePhase::CommandScopeDispatch, ResourcePhase::CommandExecute,
+        ResourcePhase::VertexBufferCreate, ResourcePhase::IndexBufferCreate, ResourcePhase::VertexBufferRecord, ResourcePhase::RafCallbacks})
+        Counter(phase).Record(77, 0, true);
+    const auto commands = Babylon::Plugins::NativeEngine::GetResourceStatistics();
+    Require(commands.commandTimingEnabled && commands.commandRead.totalNs == 77 && commands.commandScopeDispatch.totalNs == 77 &&
+        commands.commandExecute.totalNs == 77 && commands.vertexBufferCreate.totalNs == 77 && commands.indexBufferCreate.totalNs == 77 &&
+        commands.vertexBufferRecord.totalNs == 77 && commands.rafCallbacks.totalNs == 77, "all optional command spans map separately");
+    Babylon::Plugins::NativeEngine::SetCommandTimingEnabled(false);
+    Require(!Babylon::Plugins::NativeEngine::GetResourceStatistics().commandTimingEnabled &&
+        Babylon::Plugins::NativeEngine::GetResourceStatistics().commandRead.totalNs == 77, "disabling command clocks does not reset lifetime counters");
     std::cout << "ResourceStatistics: " << checks << " checks, " << failed << " failures\n";
     return failed ? 1 : 0;
 }

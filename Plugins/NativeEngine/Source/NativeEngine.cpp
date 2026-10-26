@@ -1297,6 +1297,8 @@ namespace Babylon
 
     Napi::Value NativeEngine::CreateIndexBuffer(const Napi::CallbackInfo& info)
     {
+        using namespace Plugins::NativeEngine::Detail;
+        ResourceScope timing{Counter(ResourcePhase::IndexBufferCreate), 0, CommandTimingEnabled()};
         const Napi::ArrayBuffer dataBuffer = info[0].As<Napi::ArrayBuffer>();
         const uint32_t dataByteOffset = info[1].As<Napi::Number>().Uint32Value();
         const uint32_t dataByteLength = info[2].As<Napi::Number>().Uint32Value();
@@ -1305,7 +1307,8 @@ namespace Babylon
 
         const uint16_t flags = (is32Bits ? BGFX_BUFFER_INDEX32 : 0);
         IndexBuffer* indexBuffer = new IndexBuffer{m_deviceContext, gsl::make_span(static_cast<uint8_t*>(dataBuffer.Data()) + dataByteOffset, dataByteLength), flags, dynamic};
-        return Napi::Pointer<IndexBuffer>::Create(info.Env(), indexBuffer, Napi::NapiPointerDeleter(indexBuffer));
+        auto result = Napi::Pointer<IndexBuffer>::Create(info.Env(), indexBuffer, Napi::NapiPointerDeleter(indexBuffer));
+        timing.Succeed(); return result;
     }
 
     void NativeEngine::DeleteIndexBuffer(NativeDataStream::Reader& data)
@@ -1356,13 +1359,16 @@ namespace Babylon
 
     Napi::Value NativeEngine::CreateVertexBuffer(const Napi::CallbackInfo& info)
     {
+        using namespace Plugins::NativeEngine::Detail;
+        ResourceScope timing{Counter(ResourcePhase::VertexBufferCreate), 0, CommandTimingEnabled()};
         const Napi::ArrayBuffer dataBuffer = info[0].As<Napi::ArrayBuffer>();
         const uint32_t dataByteOffset = info[1].As<Napi::Number>().Uint32Value();
         const uint32_t dataByteLength = info[2].As<Napi::Number>().Uint32Value();
         const bool dynamic = info[3].As<Napi::Boolean>().Value();
 
         VertexBuffer* vertexBuffer = new VertexBuffer(m_deviceContext, gsl::make_span(static_cast<uint8_t*>(dataBuffer.Data()) + dataByteOffset, dataByteLength), dynamic);
-        return Napi::Pointer<VertexBuffer>::Create(info.Env(), vertexBuffer, Napi::NapiPointerDeleter(vertexBuffer));
+        auto result = Napi::Pointer<VertexBuffer>::Create(info.Env(), vertexBuffer, Napi::NapiPointerDeleter(vertexBuffer));
+        timing.Succeed(); return result;
     }
 
     void NativeEngine::DeleteVertexBuffer(NativeDataStream::Reader& data)
@@ -1407,7 +1413,10 @@ namespace Babylon
 
         try
         {
+            using namespace Plugins::NativeEngine::Detail;
+            ResourceScope timing{Counter(ResourcePhase::VertexBufferRecord), 0, CommandTimingEnabled()};
             vertexArray->RecordVertexBuffer(vertexBuffer, location, byteOffset, byteStride, numElements, type, normalized, divisor);
+            timing.Succeed();
         }
         catch (std::exception& ex)
         {
@@ -4035,9 +4044,13 @@ void main() {
 
     void NativeEngine::SubmitCommands(const Napi::CallbackInfo& info)
     {
+        using namespace Plugins::NativeEngine::Detail;
+        const bool timingEnabled = CommandTimingEnabled();
         // Flush the JavaScript staging buffer first so an empty submission can
         // remain a no-op instead of waiting for the next frame.
+        ResourceScope readTiming{Counter(ResourcePhase::CommandRead), 0, timingEnabled};
         NativeDataStream::Reader reader = m_commandStream->GetReader();
+        readTiming.Succeed(); readTiming.Finish();
         if (!reader.CanRead())
         {
             return;
@@ -4059,15 +4072,21 @@ void main() {
         // shared_ptr because Dispatchable is move-only at the AppRuntime
         // layer but JsRuntime downstream type-erases via std::function which
         // requires copy-constructibility.
-        m_runtime.Dispatch([scope = std::make_shared<Graphics::FrameCompletionScope>(
-            m_deviceContext.AcquireFrameCompletionScope())](auto) {});
+        {
+            ResourceScope timing{Counter(ResourcePhase::CommandScopeDispatch), 0, timingEnabled};
+            m_runtime.Dispatch([scope = std::make_shared<Graphics::FrameCompletionScope>(
+                m_deviceContext.AcquireFrameCompletionScope())](auto) {});
+            timing.Succeed();
+        }
 
         try
         {
+            ResourceScope timing{Counter(ResourcePhase::CommandExecute), 0, timingEnabled};
             while (reader.CanRead())
             {
                 std::invoke(reader.ReadPointer<CommandFunctionPointerT>(), this, reader);
             }
+            timing.Succeed();
         }
         catch (const std::exception& exception)
         {
@@ -4425,9 +4444,14 @@ void main() {
 
                 arcana::trace_region scheduleRegion{"NativeEngine::ScheduleRequestAnimationFrameCallbacks invoke JS callbacks"};
                 auto callbacks{std::move(m_requestAnimationFrameCallbacks)};
-                for (auto& callback : callbacks)
                 {
-                    callback.Value().Call({});
+                    using namespace Plugins::NativeEngine::Detail;
+                    ResourceScope timing{Counter(ResourcePhase::RafCallbacks), 0, CommandTimingEnabled()};
+                    for (auto& callback : callbacks)
+                    {
+                        callback.Value().Call({});
+                    }
+                    timing.Succeed();
                 }
 
                 // Defer scope release to next dispatch cycle. The shared_ptr captured by
