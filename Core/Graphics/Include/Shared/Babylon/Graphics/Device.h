@@ -3,6 +3,7 @@
 #include <Babylon/JsRuntime.h>
 #include <Babylon/Graphics/Platform.h>
 #include <Babylon/Graphics/RendererType.h>
+#include <Babylon/Graphics/FrameTimings.h>
 
 #include <future>
 #include <memory>
@@ -142,6 +143,9 @@ namespace Babylon::Graphics
 
         void StartRenderingCurrentFrame();
         void FinishRenderingCurrentFrame();
+        // Frame-thread diagnostics only; timing is disabled by default.
+        void SetFrameTimingEnabled(bool enabled);
+        FrameTimings GetFrameTimings() const;
 
         void SetDiagnosticOutput(std::function<void(const char* output)> outputFunction);
 

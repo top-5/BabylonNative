@@ -81,6 +81,9 @@ namespace Babylon::Graphics
         m_impl->FinishRenderingCurrentFrame();
     }
 
+    void Device::SetFrameTimingEnabled(bool enabled) { m_impl->SetFrameTimingEnabled(enabled); }
+    FrameTimings Device::GetFrameTimings() const { return m_impl->GetFrameTimings(); }
+
     void Device::SetDiagnosticOutput(std::function<void(const char* output)> outputFunction)
     {
         m_impl->SetDiagnosticOutput(std::move(outputFunction));

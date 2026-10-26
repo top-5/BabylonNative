@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <chrono>
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -376,9 +377,23 @@ namespace Babylon::Graphics
         m_bgfxCallback.SetDiagnosticOutput(std::move(diagnosticOutput));
     }
 
+    void DeviceImpl::SetFrameTimingEnabled(bool enabled)
+    {
+        ASSERT_THREAD_AFFINITY(m_renderThreadAffinity);
+        m_frameTimingEnabled = enabled;
+        m_frameTimings = {};
+    }
+
+    FrameTimings DeviceImpl::GetFrameTimings() const
+    {
+        ASSERT_THREAD_AFFINITY(m_renderThreadAffinity);
+        return m_frameTimings;
+    }
+
     void DeviceImpl::StartRenderingCurrentFrame()
     {
         arcana::trace_region startRenderingRegion{"DeviceImpl::StartRenderingCurrentFrame"};
+        const auto timingStart = m_frameTimingEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
         ASSERT_THREAD_AFFINITY(m_renderThreadAffinity);
 
@@ -409,11 +424,22 @@ namespace Babylon::Graphics
         // were scheduled by NativeEngine/NativeXr. Those tasks acquire FrameCompletionScopes
         // (keeping the gate reference count > 0) and dispatch JS callbacks to the JS thread.
         m_frameStartDispatcher.tick(*m_cancellationSource);
+        if (m_frameTimingEnabled) m_frameTimings.startNs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - timingStart).count());
     }
 
     void DeviceImpl::FinishRenderingCurrentFrame()
     {
         arcana::trace_region finishRenderingRegion{"DeviceImpl::FinishRenderingCurrentFrame"};
+        auto timingCursor = m_frameTimingEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        const auto mark = [&]() -> uint64_t {
+            if (!m_frameTimingEnabled) return 0;
+            const auto now = std::chrono::steady_clock::now();
+            const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now - timingCursor).count();
+            timingCursor = now; return static_cast<uint64_t>(ns);
+        };
+        m_frameTimings.valid = false;
+        m_frameTimings.midFrameFlushes = 0;
 
         ASSERT_THREAD_AFFINITY(m_renderThreadAffinity);
 
@@ -445,6 +471,7 @@ namespace Babylon::Graphics
 
                 if (m_flushRequested)
                 {
+                    if (m_frameTimingEnabled) ++m_frameTimings.midFrameFlushes;
                     PerformMidFrameViewFlush();
                     m_flushRequested = false;
                     m_flushCompleteCV.notify_all();
@@ -455,8 +482,10 @@ namespace Babylon::Graphics
             }
             m_frameBlocked = true;
         }
+        m_frameTimings.finishGateNs = mark();
 
         m_beforeRenderDispatcher.tick(*m_cancellationSource);
+        m_frameTimings.beforeRenderNs = mark();
 
         // End the frame encoder before calling bgfx::frame(). frame() waits for
         // all encoders to be returned via encoderApiWait(), so the encoder must
@@ -466,12 +495,17 @@ namespace Babylon::Graphics
             bgfx::end(m_frameEncoder);
             m_frameEncoder = nullptr;
         }
+        m_frameTimings.encoderEndNs = mark();
 
         Frame();
+        // Frame's child spans share this boundary; do not add its parent again.
+        (void)mark();
 
         m_afterRenderDispatcher.tick(*m_cancellationSource);
+        m_frameTimings.afterRenderNs = mark();
 
         m_rendering = false;
+        if (m_frameTimingEnabled) { ++m_frameTimings.sequence; m_frameTimings.valid = true; }
     }
 
     float DeviceImpl::GetHardwareScalingLevel() const
@@ -957,6 +991,13 @@ namespace Babylon::Graphics
     void DeviceImpl::Frame()
     {
         arcana::trace_region frameRegion{"DeviceImpl::Frame"};
+        auto timingCursor = m_frameTimingEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        const auto mark = [&]() -> uint64_t {
+            if (!m_frameTimingEnabled) return 0;
+            const auto now = std::chrono::steady_clock::now();
+            const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now - timingCursor).count();
+            timingCursor = now; return static_cast<uint64_t>(ns);
+        };
 
         // Update bgfx state if necessary.
         UpdateBgfxState();
@@ -967,7 +1008,9 @@ namespace Babylon::Graphics
         // Advance frame and render!
         const uint8_t frameFlags = m_captureNextFrame.exchange(false) ? BGFX_FRAME_DEBUG_CAPTURE : 0;
         ReleaseFrameVertexLayouts();
+        m_frameTimings.framePrepareNs = mark();
         uint32_t frameNumber{bgfx::frame(frameFlags)};
+        m_frameTimings.bgfxFrameNs = mark();
 
 #ifdef GRAPHICS_BACK_BUFFER_SUPPORT
         if (externalScreenShot && !m_bgfxCallback.IsDeviceLost())
@@ -981,6 +1024,7 @@ namespace Babylon::Graphics
         ResetClearPalette();
         m_nextViewId.store(0);
         m_midFrameFlushCount.store(0);
+        m_frameTimings.frameAfterNs = mark();
     }
 
     void DeviceImpl::CompleteReadTextureRequests(uint32_t frameNumber)

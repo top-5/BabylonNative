@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <chrono>
 
 namespace Babylon::Embedding
 {
@@ -142,6 +143,7 @@ namespace Babylon::Embedding
         // Device::AddToJavaScript inside that lambda sees an open frame to
         // record into. Both run on the host thread, so the dispatched
         // lambda always sees an open frame on the JS thread.
+        m_runtime.m_device->SetFrameTimingEnabled(m_frameTimingEnabled);
         m_runtime.m_device->StartRenderingCurrentFrame();
         m_initialized = true;
 
@@ -154,6 +156,8 @@ namespace Babylon::Embedding
     void View::RenderFrame()
     {
         RuntimeImpl& impl = m_impl->m_runtime;
+        m_impl->m_frameTimings = {};
+        const auto timingStart = m_impl->m_frameTimingEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 
         // Host may call unconditionally from its draw callback; the
         // not-rendering cases early-out.
@@ -178,9 +182,26 @@ namespace Babylon::Embedding
         {
             m_impl->m_beforePresent();
         }
+        const auto overlayEnd = m_impl->m_frameTimingEnabled ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
         impl.m_device->FinishRenderingCurrentFrame();
         impl.m_device->StartRenderingCurrentFrame();
+        if (m_impl->m_frameTimingEnabled)
+        {
+            auto timings = impl.m_device->GetFrameTimings();
+            timings.overlayNs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(overlayEnd - timingStart).count());
+            timings.viewNs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - timingStart).count());
+            m_impl->m_frameTimings = timings;
+        }
     }
+
+    void View::SetFrameTimingEnabled(bool enabled)
+    {
+        m_impl->m_frameTimingEnabled = enabled;
+        m_impl->m_frameTimings = {};
+        if (m_impl->m_runtime.m_device) m_impl->m_runtime.m_device->SetFrameTimingEnabled(enabled);
+    }
+
+    Babylon::Graphics::FrameTimings View::GetFrameTimings() const { return m_impl->m_frameTimings; }
 
     void View::SetBeforePresent(std::function<void()> callback)
     {

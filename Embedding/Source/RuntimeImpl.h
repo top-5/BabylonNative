@@ -151,6 +151,8 @@ namespace Babylon::Embedding
         // Host overlay draws, run on the frame thread in RenderFrame before the
         // frame is finished (View::SetBeforePresent).
         std::function<void()> m_beforePresent;
+        bool m_frameTimingEnabled{};
+        Babylon::Graphics::FrameTimings m_frameTimings{};
 
         // Latches true the first time InitializeIfReady succeeds; never
         // flips back. A new ViewImpl is constructed per View attach.

@@ -70,6 +70,8 @@ namespace Babylon::Graphics
 
         void StartRenderingCurrentFrame();
         void FinishRenderingCurrentFrame();
+        void SetFrameTimingEnabled(bool enabled);
+        FrameTimings GetFrameTimings() const;
 
         float GetHardwareScalingLevel() const;
         void SetHardwareScalingLevel(float level);
@@ -165,6 +167,8 @@ namespace Babylon::Graphics
         arcana::affinity m_renderThreadAffinity{};
         bool m_rendering{};
         bool m_firstFrameStarted{};
+        bool m_frameTimingEnabled{};
+        FrameTimings m_frameTimings{};
 
         // Keep platform-owned display resources alive until after bgfx shutdown.
         std::unique_ptr<void, void (*)(void*)> m_nativeDisplay{nullptr, nullptr};

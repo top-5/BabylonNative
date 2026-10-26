@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Babylon/Graphics/Platform.h>
+#include <Babylon/Graphics/FrameTimings.h>
 #include <functional>
 
 #include <cstdint>
@@ -70,6 +71,10 @@ namespace Babylon::Embedding
         // is suspended. Called from the platform view/control's draw callback
         // (WM_PAINT, MTKViewDelegate::draw, View.onDraw, ...).
         void RenderFrame();
+        // Optional completed RenderFrame wall-time partition; frame-thread only.
+        // A skipped/suspended frame returns an invalid snapshot, never a stale one.
+        void SetFrameTimingEnabled(bool enabled);
+        Babylon::Graphics::FrameTimings GetFrameTimings() const;
 
         // Resize the bound surface. Pass whatever units your view layer reports;
         // the View converts to logical internally when `units == Physical`.
