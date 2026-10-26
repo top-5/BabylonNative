@@ -9,6 +9,7 @@
 #include "InstanceRepacker.h"
 #include "StorageBuffer.h"
 #include "ResourceStatisticsInternal.h"
+#include <Babylon/Plugins/PreparedImageCache.h>
 
 #include <arcana/threading/task.h>
 #include <arcana/threading/task_schedulers.h>
@@ -2104,22 +2105,48 @@ void main() {
                 }
                 arcana::trace_region loadRegion{"NativeEngine::LoadTexture"};
                 using namespace Plugins::NativeEngine::Detail;
-                bimg::ImageContainer* image;
+                Plugins::NativeEngine::PreparedImageCacheContext cacheContext;
+                std::vector<uint8_t> encodedSnapshot;
+                bool usePreparedCache = false;
+                const auto preparedCache = Plugins::NativeEngine::GetPreparedImageCacheStatistics();
+                if (preparedCache.enabled)
                 {
-                    ResourceScope scope{Counter(ResourcePhase::ParseImage), dataSpan.size()};
-                    arcana::trace_region region{"NativeEngine::LoadTexture ParseImage"};
-                    image = ParseImage(Graphics::DeviceContext::GetDefaultAllocator(), dataSpan);
-                    scope.Succeed();
-                }
-                {
-                    ResourceScope scope{Counter(ResourcePhase::PrepareImage), image->m_size};
-                    arcana::trace_region region{"NativeEngine::LoadTexture PrepareImage"};
-                    image = PrepareImage(Graphics::DeviceContext::GetDefaultAllocator(), image, invertY, srgb, generateMips, true);
-                    if (image == nullptr)
+                    try
                     {
-                        throw std::runtime_error{"Failed to prepare image for texture (unsupported format or image conversion failure)."};
+                        const auto* caps = bgfx::getCaps();
+                        cacheContext.rendererType = static_cast<uint32_t>(bgfx::getRendererType());
+                        cacheContext.invertY = invertY; cacheContext.srgb = srgb; cacheContext.generateMips = generateMips;
+                        cacheContext.originBottomLeft = caps->originBottomLeft;
+                        cacheContext.formatCapabilities.assign(std::begin(caps->formats), std::end(caps->formats));
+                        // A stable encoded snapshot supplies the key, decoder and store; a mutable caller buffer
+                        // must not acquire a key for different pixels. Oversize inputs never enter the cache.
+                        if (dataSpan.size() && static_cast<uint64_t>(dataSpan.size()) <= preparedCache.budgetBytes)
+                            encodedSnapshot.assign(dataSpan.begin(), dataSpan.end());
+                        usePreparedCache = true;
                     }
-                    scope.Succeed();
+                    catch (...) { encodedSnapshot.clear(); } // cache setup is optional; preserve the loader's normal path
+                }
+                const auto source = encodedSnapshot.empty() ? dataSpan : gsl::make_span(encodedSnapshot);
+                auto& allocator = Graphics::DeviceContext::GetDefaultAllocator();
+                bimg::ImageContainer* image = usePreparedCache ? Plugins::NativeEngine::ClonePreparedImage(
+                    source.data(), source.size(), cacheContext, allocator) : nullptr;
+                if (image == nullptr)
+                {
+                    {
+                        ResourceScope scope{Counter(ResourcePhase::ParseImage), source.size()};
+                        arcana::trace_region region{"NativeEngine::LoadTexture ParseImage"};
+                        image = ParseImage(allocator, source);
+                        scope.Succeed();
+                    }
+                    {
+                        ResourceScope scope{Counter(ResourcePhase::PrepareImage), image->m_size};
+                        arcana::trace_region region{"NativeEngine::LoadTexture PrepareImage"};
+                        image = PrepareImage(allocator, image, invertY, srgb, generateMips, true);
+                        if (image == nullptr)
+                            throw std::runtime_error{"Failed to prepare image for texture (unsupported format or image conversion failure)."};
+                        scope.Succeed();
+                    }
+                    if (usePreparedCache) Plugins::NativeEngine::StorePreparedImage(source.data(), source.size(), cacheContext, *image);
                 }
                 {
                     ResourceScope scope{Counter(ResourcePhase::TextureSubmit), image->m_size};
