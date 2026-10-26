@@ -2,6 +2,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/../../Dependencies/shaderc.cmake)
 
 set(SOURCES
     "Include/Babylon/Plugins/NativeEngine.h"
+    "Include/Babylon/Plugins/NativeEngineResourceStatistics.h"
     "Source/IndexBuffer.cpp"
     "Source/IndexBuffer.h"
     "Source/InstanceRepacker.cpp"
@@ -17,6 +18,8 @@ set(SOURCES
     "Source/PrimitiveModeExpansion.h"
     "Source/Program.cpp"
     "Source/Program.h"
+    "Source/ResourceStatistics.cpp"
+    "Source/ResourceStatisticsInternal.h"
     "Source/ShaderProvider.h"
     "Source/ShaderProvider.cpp"
     "Source/StorageBuffer.cpp"

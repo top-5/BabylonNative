@@ -3,6 +3,11 @@
 
 namespace Babylon::Plugins::ShaderCache
 {
+    Statistics GetStatistics()
+    {
+        return ShaderCacheImpl::Instance ? ShaderCacheImpl::Instance->GetStatistics() : Statistics{};
+    }
+
     void Enable()
     {
         if (!IsEnabled())

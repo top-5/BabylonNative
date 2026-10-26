@@ -1,11 +1,14 @@
 #pragma once
 
 #include <Babylon/Plugins/ShaderCacheInternal.h>
+#include <Babylon/Plugins/ShaderCache.h>
 
 #include <fstream>
 #include <memory>
 #include <string_view>
 #include <map>
+#include <atomic>
+#include <mutex>
 
 #include "xxhash.h"
 
@@ -20,6 +23,7 @@ namespace Babylon::Plugins::ShaderCache
         uint32_t Load(std::istream& stream);
 
         void Clear();
+        Statistics GetStatistics() const;
 
         std::shared_ptr<Graphics::BgfxShaderInfo> AddShader(std::string_view vertexSource, std::string_view fragmentSource, Graphics::BgfxShaderInfo shaderInfo, const std::map<std::string, uint32_t>& instancedAttributes);
         std::shared_ptr<Graphics::BgfxShaderInfo> GetShader(std::string_view vertexSource, std::string_view fragmentSource, const std::map<std::string, uint32_t>& instancedAttributes);
@@ -41,5 +45,16 @@ namespace Babylon::Plugins::ShaderCache
 
         ShaderMap m_cache;
         ShaderMap m_computeCache;
+        // Compiler work is dispatched to workers; cache maps and persistence must not race those lookups.
+        std::mutex m_mutex;
+        struct Counters
+        {
+            std::atomic<uint64_t> programHits{}, programMisses{}, programInsertions{}, programEntries{};
+            std::atomic<uint64_t> transformFeedbackHits{}, transformFeedbackMisses{}, transformFeedbackInsertions{}, transformFeedbackEntries{};
+            std::atomic<uint64_t> loadCalls{}, loadFailures{}, loadedEntries{};
+            std::atomic<uint64_t> saveCalls{}, saveFailures{}, savedEntries{};
+            std::atomic<uint64_t> clearCalls{};
+        } m_counters;
+        void UpdateEntryCounts(); // caller holds m_mutex
     };
 }

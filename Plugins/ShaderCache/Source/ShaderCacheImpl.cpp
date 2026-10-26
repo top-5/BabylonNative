@@ -67,33 +67,82 @@ namespace Babylon::Plugins::ShaderCache
     //     compute shaders, and key instanced variants by their routed attributes.
     static const uint32_t CACHE_VERSION = 10;
 
+    Statistics ShaderCacheImpl::GetStatistics() const
+    {
+        Statistics result{};
+        result.enabled = true;
+#define READ_COUNTER(name) result.name = m_counters.name.load(std::memory_order_relaxed)
+        READ_COUNTER(programHits); READ_COUNTER(programMisses); READ_COUNTER(programInsertions); READ_COUNTER(programEntries);
+        READ_COUNTER(transformFeedbackHits); READ_COUNTER(transformFeedbackMisses); READ_COUNTER(transformFeedbackInsertions); READ_COUNTER(transformFeedbackEntries);
+        READ_COUNTER(loadCalls); READ_COUNTER(loadFailures); READ_COUNTER(loadedEntries);
+        READ_COUNTER(saveCalls); READ_COUNTER(saveFailures); READ_COUNTER(savedEntries); READ_COUNTER(clearCalls);
+#undef READ_COUNTER
+        return result;
+    }
+
+    void ShaderCacheImpl::UpdateEntryCounts()
+    {
+        m_counters.programEntries.store(m_cache.size(), std::memory_order_relaxed);
+        m_counters.transformFeedbackEntries.store(m_computeCache.size(), std::memory_order_relaxed);
+    }
+
     void ShaderCacheImpl::Clear()
     {
+        const std::lock_guard<std::mutex> lock{m_mutex};
         m_cache.clear();
         m_computeCache.clear();
+        UpdateEntryCounts();
+        ++m_counters.clearCalls;
     }
 
     uint32_t ShaderCacheImpl::Save(std::ostream& stream)
     {
-        uint32_t cacheVersion{CACHE_VERSION};
-        stream.write(reinterpret_cast<const char*>(&cacheVersion), sizeof(uint32_t));
-        SaveEntries(stream, m_cache);
-        SaveEntries(stream, m_computeCache);
-        return static_cast<uint32_t>(m_cache.size() + m_computeCache.size());
+        const std::lock_guard<std::mutex> lock{m_mutex};
+        ++m_counters.saveCalls;
+        try
+        {
+            uint32_t cacheVersion{CACHE_VERSION};
+            stream.write(reinterpret_cast<const char*>(&cacheVersion), sizeof(uint32_t));
+            SaveEntries(stream, m_cache);
+            SaveEntries(stream, m_computeCache);
+            const auto count = static_cast<uint32_t>(m_cache.size() + m_computeCache.size());
+            if (stream) m_counters.savedEntries += count;
+            else ++m_counters.saveFailures;
+            return count; // preserve the existing return contract even when the stream is bad
+        }
+        catch (...)
+        {
+            ++m_counters.saveFailures;
+            throw;
+        }
     }
 
     uint32_t ShaderCacheImpl::Load(std::istream& stream)
     {
-        uint32_t cacheVersion;
-        stream.read(reinterpret_cast<char*>(&cacheVersion), sizeof(uint32_t));
-        if (cacheVersion != CACHE_VERSION)
+        const std::lock_guard<std::mutex> lock{m_mutex};
+        ++m_counters.loadCalls;
+        try
         {
-            return 0;
+            uint32_t cacheVersion{};
+            stream.read(reinterpret_cast<char*>(&cacheVersion), sizeof(uint32_t));
+            if (!stream || cacheVersion != CACHE_VERSION)
+            {
+                ++m_counters.loadFailures;
+                return 0;
+            }
+            const uint32_t programCount = LoadEntries(stream, m_cache);
+            const uint32_t computeCount = LoadEntries(stream, m_computeCache);
+            UpdateEntryCounts();
+            if (stream) m_counters.loadedEntries += uint64_t(programCount) + computeCount;
+            else ++m_counters.loadFailures;
+            return programCount + computeCount;
         }
-
-        const uint32_t programCount = LoadEntries(stream, m_cache);
-        const uint32_t computeCount = LoadEntries(stream, m_computeCache);
-        return programCount + computeCount;
+        catch (...)
+        {
+            UpdateEntryCounts();
+            ++m_counters.loadFailures;
+            throw;
+        }
     }
 
     void ShaderCacheImpl::SaveEntries(std::ostream& stream, const ShaderMap& entries)
@@ -203,23 +252,35 @@ namespace Babylon::Plugins::ShaderCache
 
     std::shared_ptr<Graphics::BgfxShaderInfo> ShaderCacheImpl::AddShader(std::string_view vertexSource, std::string_view fragmentSource, Graphics::BgfxShaderInfo shaderInfo, const std::map<std::string, uint32_t>& instancedAttributes)
     {
-        return m_cache.try_emplace(Hash(vertexSource, fragmentSource, instancedAttributes), std::make_shared<Graphics::BgfxShaderInfo>(std::move(shaderInfo))).first->second;
+        const std::lock_guard<std::mutex> lock{m_mutex};
+        const auto result = m_cache.try_emplace(Hash(vertexSource, fragmentSource, instancedAttributes), std::make_shared<Graphics::BgfxShaderInfo>(std::move(shaderInfo)));
+        if (result.second) { ++m_counters.programInsertions; UpdateEntryCounts(); }
+        return result.first->second;
     }
 
     std::shared_ptr<Graphics::BgfxShaderInfo> ShaderCacheImpl::GetShader(std::string_view vertexSource, std::string_view fragmentSource, const std::map<std::string, uint32_t>& instancedAttributes)
     {
+        const std::lock_guard<std::mutex> lock{m_mutex};
         const auto iter = m_cache.find(Hash(vertexSource, fragmentSource, instancedAttributes));
+        if (iter == m_cache.end()) ++m_counters.programMisses;
+        else ++m_counters.programHits;
         return (iter == m_cache.end() ? nullptr : iter->second);
     }
 
     std::shared_ptr<Graphics::BgfxShaderInfo> ShaderCacheImpl::AddTransformFeedbackShader(std::string_view vertexSource, const std::vector<std::string>& varyings, Graphics::BgfxShaderInfo shaderInfo)
     {
-        return m_computeCache.try_emplace(Hash(vertexSource, varyings), std::make_shared<Graphics::BgfxShaderInfo>(std::move(shaderInfo))).first->second;
+        const std::lock_guard<std::mutex> lock{m_mutex};
+        const auto result = m_computeCache.try_emplace(Hash(vertexSource, varyings), std::make_shared<Graphics::BgfxShaderInfo>(std::move(shaderInfo)));
+        if (result.second) { ++m_counters.transformFeedbackInsertions; UpdateEntryCounts(); }
+        return result.first->second;
     }
 
     std::shared_ptr<Graphics::BgfxShaderInfo> ShaderCacheImpl::GetTransformFeedbackShader(std::string_view vertexSource, const std::vector<std::string>& varyings)
     {
+        const std::lock_guard<std::mutex> lock{m_mutex};
         const auto iter = m_computeCache.find(Hash(vertexSource, varyings));
+        if (iter == m_computeCache.end()) ++m_counters.transformFeedbackMisses;
+        else ++m_counters.transformFeedbackHits;
         return (iter == m_computeCache.end() ? nullptr : iter->second);
     }
 

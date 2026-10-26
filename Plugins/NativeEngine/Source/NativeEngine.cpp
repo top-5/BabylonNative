@@ -8,6 +8,7 @@
 #include "JsConsoleLogger.h"
 #include "InstanceRepacker.h"
 #include "StorageBuffer.h"
+#include "ResourceStatisticsInternal.h"
 
 #include <arcana/threading/task.h>
 #include <arcana/threading/task_schedulers.h>
@@ -2089,13 +2090,30 @@ void main() {
                     return;
                 }
                 arcana::trace_region loadRegion{"NativeEngine::LoadTexture"};
-                bimg::ImageContainer* image{ParseImage(Graphics::DeviceContext::GetDefaultAllocator(), dataSpan)};
-                image = PrepareImage(Graphics::DeviceContext::GetDefaultAllocator(), image, invertY, srgb, generateMips);
-                if (image == nullptr)
+                using namespace Plugins::NativeEngine::Detail;
+                bimg::ImageContainer* image;
                 {
-                    throw std::runtime_error{"Failed to prepare image for texture (unsupported format or image conversion failure)."};
+                    ResourceScope scope{Counter(ResourcePhase::ParseImage), dataSpan.size()};
+                    arcana::trace_region region{"NativeEngine::LoadTexture ParseImage"};
+                    image = ParseImage(Graphics::DeviceContext::GetDefaultAllocator(), dataSpan);
+                    scope.Succeed();
                 }
-                LoadTextureFromImage(texture, image, srgb);
+                {
+                    ResourceScope scope{Counter(ResourcePhase::PrepareImage), image->m_size};
+                    arcana::trace_region region{"NativeEngine::LoadTexture PrepareImage"};
+                    image = PrepareImage(Graphics::DeviceContext::GetDefaultAllocator(), image, invertY, srgb, generateMips);
+                    if (image == nullptr)
+                    {
+                        throw std::runtime_error{"Failed to prepare image for texture (unsupported format or image conversion failure)."};
+                    }
+                    scope.Succeed();
+                }
+                {
+                    ResourceScope scope{Counter(ResourcePhase::TextureSubmit), image->m_size};
+                    arcana::trace_region region{"NativeEngine::LoadTexture TextureSubmit CPU API"};
+                    LoadTextureFromImage(texture, image, srgb);
+                    scope.Succeed();
+                }
             })
             .then(m_runtimeScheduler, *m_cancellationSource, [dataRef{Napi::Persistent(data)}, onSuccessRef{Napi::Persistent(onSuccess)}, onErrorRef{Napi::Persistent(onError)}, cancellationSource{m_cancellationSource}](arcana::expected<void, std::exception_ptr> result) {
                 if (result.has_error())
