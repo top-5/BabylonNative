@@ -30,6 +30,13 @@ int main()
     ResourceCounter counter;
     Require(counter.Snapshot().calls == 0, "fresh counter is empty");
     {
+        ResourceScope<FakeClock> background{counter, 999, false};
+        FakeClock::current += std::chrono::nanoseconds{500};
+        background.Succeed();
+    }
+    Require(counter.Snapshot().calls == 0 && counter.Snapshot().bytes == 0,
+        "disabled background preparation does not contaminate load-image counters");
+    {
         ResourceScope<FakeClock> scope{counter, 100};
         FakeClock::current += std::chrono::nanoseconds{13};
         scope.Succeed();
@@ -57,6 +64,24 @@ int main()
     stats = counter.Snapshot();
     Require(stats.calls == 3 && stats.failed == 2 && stats.totalNs == 42 && stats.maxNs == 29 && stats.bytes == 310,
         "unfinished scope fails and a backwards test clock cannot underflow duration");
+
+    ResourceCounter parentPreparation, childMip;
+    FakeClock::current = std::chrono::nanoseconds{0};
+    {
+        ResourceScope<FakeClock> parent{parentPreparation, 1000};
+        FakeClock::current += std::chrono::nanoseconds{10};
+        {
+            ResourceScope<FakeClock> child{childMip, 1000};
+            FakeClock::current += std::chrono::nanoseconds{80};
+            child.Succeed();
+        }
+        FakeClock::current += std::chrono::nanoseconds{10};
+        parent.Succeed();
+    }
+    Require(parentPreparation.Snapshot().totalNs == 100 && childMip.Snapshot().totalNs == 80,
+        "nested mip span overlaps its preparation parent and cannot be added to it");
+    Require(parentPreparation.Snapshot().calls == 1 && childMip.Snapshot().calls == 1,
+        "nested operation counters remain independent completed attempts");
 
     ResourceCounter concurrent;
     constexpr uint64_t workers = 6, iterations = 5000;
@@ -92,6 +117,9 @@ int main()
     Counter(ResourcePhase::ParseImage).Record(11, 101, true);
     Counter(ResourcePhase::PrepareImage).Record(22, 202, false);
     Counter(ResourcePhase::TextureSubmit).Record(33, 303, true);
+    Counter(ResourcePhase::ImageFlip).Record(44, 404, true);
+    Counter(ResourcePhase::FormatConvert).Record(55, 505, false);
+    Counter(ResourcePhase::MipGenerate).Record(66, 606, true);
     const auto publicStats = Babylon::Plugins::NativeEngine::GetResourceStatistics();
     Require(publicStats.parseImage.calls == 1 && publicStats.parseImage.totalNs == 11 && publicStats.parseImage.bytes == 101,
         "public snapshot maps parse-image counters exactly");
@@ -99,9 +127,17 @@ int main()
         "public snapshot maps preparation failure counters exactly");
     Require(publicStats.textureSubmit.calls == 1 && publicStats.textureSubmit.succeeded == 1 && publicStats.textureSubmit.bytes == 303,
         "public snapshot maps CPU texture submission counters exactly");
+    Require(publicStats.imageFlip.calls == 1 && publicStats.imageFlip.totalNs == 44 && publicStats.imageFlip.bytes == 404,
+        "public snapshot maps image-flip work independently");
+    Require(publicStats.formatConvert.calls == 1 && publicStats.formatConvert.failed == 1 && publicStats.formatConvert.totalNs == 55,
+        "public snapshot maps format-conversion failure independently");
+    Require(publicStats.mipGenerate.calls == 1 && publicStats.mipGenerate.succeeded == 1 && publicStats.mipGenerate.bytes == 606,
+        "public snapshot maps mip-generation work independently");
     const auto replay = Babylon::Plugins::NativeEngine::GetResourceStatistics();
     Require(replay.parseImage.calls == 1 && replay.prepareImage.failed == 1 && replay.textureSubmit.bytes == 303,
         "reading public snapshots never resets counters");
+    Require(replay.imageFlip.totalNs == 44 && replay.formatConvert.failed == 1 && replay.mipGenerate.totalNs == 66,
+        "reading public snapshots preserves all nested-span lifetime counters");
     std::cout << "ResourceStatistics: " << checks << " checks, " << failed << " failures\n";
     return failed ? 1 : 0;
 }

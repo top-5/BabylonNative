@@ -25,6 +25,12 @@ namespace Babylon::Plugins::NativeEngine
         ResourceOperationStatistics prepareImage;
         // Prepared mip bytes entering bgfx texture creation/update API submission.
         ResourceOperationStatistics textureSubmit;
+        // Nested preparation work; overlaps prepareImage and must not be added to it.
+        // Input decoded bytes for orientation flip, each format conversion, and mip generation.
+        // Only the LoadTexture worker path, excluding per-frame raw/cube texture preparation.
+        ResourceOperationStatistics imageFlip;
+        ResourceOperationStatistics formatConvert;
+        ResourceOperationStatistics mipGenerate;
     };
 
     // Process-lifetime completed counters: no reset. Worker tasks may overlap; totals

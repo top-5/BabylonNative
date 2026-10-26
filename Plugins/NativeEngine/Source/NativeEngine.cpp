@@ -387,8 +387,9 @@ namespace Babylon
         // tasks, which capture the exception and route it to their JavaScript onError callback,
         // and the one synchronous caller translates it into a Napi::Error. Returning null instead
         // would be silently dereferenced by LoadTextureFromImage / LoadCubeTextureFromImages.
-        bimg::ImageContainer* PrepareImage(bx::AllocatorI& allocator, bimg::ImageContainer* image, bool invertY, bool srgb, bool generateMips)
+        bimg::ImageContainer* PrepareImage(bx::AllocatorI& allocator, bimg::ImageContainer* image, bool invertY, bool srgb, bool generateMips, bool profileImageLoad = false)
         {
+            using namespace Plugins::NativeEngine::Detail;
             assert(
                 image->m_format == bimg::TextureFormat::R8 ||
                 image->m_format == bimg::TextureFormat::R16 ||
@@ -408,11 +409,16 @@ namespace Babylon
 
             if (bgfx::getCaps()->originBottomLeft ? invertY : !invertY)
             {
+                ResourceScope scope{Counter(ResourcePhase::ImageFlip), image->m_size, profileImageLoad};
+                arcana::trace_region region{"NativeEngine::PrepareImage Flip"};
                 FlipImage({static_cast<uint8_t*>(image->m_data), image->m_size}, image->m_height);
+                scope.Succeed();
             }
 
             if (srgb && !bgfx::isTextureValid(1, false, 1, Cast(image->m_format), BGFX_TEXTURE_SRGB))
             {
+                ResourceScope scope{Counter(ResourcePhase::FormatConvert), image->m_size, profileImageLoad};
+                arcana::trace_region region{"NativeEngine::PrepareImage sRGB FormatConvert"};
                 const bimg::TextureFormat::Enum srcFormat{image->m_format};
 
                 bimg::ImageContainer* oldImage{image};
@@ -425,6 +431,7 @@ namespace Babylon
                 }
 
                 assert(bgfx::isTextureValid(1, false, 1, Cast(image->m_format), BGFX_TEXTURE_SRGB));
+                scope.Succeed();
             }
 
             if (generateMips)
@@ -439,6 +446,8 @@ namespace Babylon
                 if (image->m_format != bimg::TextureFormat::RGBA8 &&
                     image->m_format != bimg::TextureFormat::RGBA32F)
                 {
+                    ResourceScope scope{Counter(ResourcePhase::FormatConvert), image->m_size, profileImageLoad};
+                    arcana::trace_region region{"NativeEngine::PrepareImage Mip FormatConvert"};
                     const bimg::TextureFormat::Enum dstFormat =
                         (image->m_format == bimg::TextureFormat::R16 ||
                          image->m_format == bimg::TextureFormat::R16F ||
@@ -460,8 +469,11 @@ namespace Babylon
                         throw std::runtime_error{std::string{"Failed to convert "} + bimg::getName(srcFormat) + " image to " +
                             bimg::getName(dstFormat) + " for mip generation."};
                     }
+                    scope.Succeed();
                 }
 
+                ResourceScope scope{Counter(ResourcePhase::MipGenerate), image->m_size, profileImageLoad};
+                arcana::trace_region region{"NativeEngine::PrepareImage GenerateMips"};
                 bimg::ImageContainer* oldImage{image};
                 image = bimg::imageGenerateMips(&allocator, *image, srgb);
                 bimg::imageFree(oldImage);
@@ -470,6 +482,7 @@ namespace Babylon
                 {
                     throw std::runtime_error{"Failed to generate mips for image."};
                 }
+                scope.Succeed();
             }
 
             return image;
@@ -2101,7 +2114,7 @@ void main() {
                 {
                     ResourceScope scope{Counter(ResourcePhase::PrepareImage), image->m_size};
                     arcana::trace_region region{"NativeEngine::LoadTexture PrepareImage"};
-                    image = PrepareImage(Graphics::DeviceContext::GetDefaultAllocator(), image, invertY, srgb, generateMips);
+                    image = PrepareImage(Graphics::DeviceContext::GetDefaultAllocator(), image, invertY, srgb, generateMips, true);
                     if (image == nullptr)
                     {
                         throw std::runtime_error{"Failed to prepare image for texture (unsupported format or image conversion failure)."};

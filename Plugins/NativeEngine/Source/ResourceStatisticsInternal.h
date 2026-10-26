@@ -31,7 +31,7 @@ namespace Babylon::Plugins::NativeEngine::Detail
         std::atomic<uint64_t> m_calls{}, m_succeeded{}, m_failed{}, m_totalNs{}, m_maxNs{}, m_bytes{};
     };
 
-    enum class ResourcePhase { ParseImage, PrepareImage, TextureSubmit };
+    enum class ResourcePhase { ParseImage, PrepareImage, TextureSubmit, ImageFlip, FormatConvert, MipGenerate };
     ResourceCounter& Counter(ResourcePhase phase) noexcept;
 
     // Explicit Succeed is called only after the full operation (including its checks)
@@ -40,19 +40,20 @@ namespace Babylon::Plugins::NativeEngine::Detail
     class ResourceScope final
     {
     public:
-        ResourceScope(ResourceCounter& counter, uint64_t bytes) noexcept
-            : m_counter{counter}, m_bytes{bytes}, m_started{Clock::now()} {}
+        ResourceScope(ResourceCounter& counter, uint64_t bytes, bool enabled = true) noexcept
+            : m_counter{enabled ? &counter : nullptr}, m_bytes{bytes}, m_started{enabled ? Clock::now() : typename Clock::time_point{}} {}
         ~ResourceScope() noexcept
         {
+            if (!m_counter) return;
             const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - m_started).count();
-            m_counter.Record(elapsed > 0 ? static_cast<uint64_t>(elapsed) : 0, m_bytes, m_succeeded);
+            m_counter->Record(elapsed > 0 ? static_cast<uint64_t>(elapsed) : 0, m_bytes, m_succeeded);
         }
         ResourceScope(const ResourceScope&) = delete;
         ResourceScope& operator=(const ResourceScope&) = delete;
         void Succeed() noexcept { m_succeeded = true; }
 
     private:
-        ResourceCounter& m_counter;
+        ResourceCounter* m_counter;
         uint64_t m_bytes;
         typename Clock::time_point m_started;
         bool m_succeeded{};
