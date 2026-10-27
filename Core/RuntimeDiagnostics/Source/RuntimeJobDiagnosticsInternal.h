@@ -9,6 +9,18 @@ namespace Babylon::RuntimeDiagnostics::Detail
     // Shared by noexcept wrapper catches; atomically marks missing observations.
     // Exposed internally so helper tests can verify fail-closed snapshots.
     void RecordObserverFailure() noexcept;
+    inline bool AddWork(std::array<uint64_t, WorkKindCount>& calls,
+        std::array<double, WorkKindCount>& totalMs, std::array<double, WorkKindCount>& maxMs,
+        size_t kind, uint64_t elapsedNs) noexcept
+    {
+        if (kind >= WorkKindCount || calls[kind] == std::numeric_limits<uint64_t>::max()) return false;
+        const double elapsedMs = double(elapsedNs) / 1e6;
+        const double total = totalMs[kind] + elapsedMs;
+        if (!std::isfinite(total)) return false;
+        ++calls[kind]; totalMs[kind] = total;
+        if (elapsedMs > maxMs[kind]) maxMs[kind] = elapsedMs;
+        return true;
+    }
     struct StartInfo { bool accepted{}; uint64_t queuedAt{}, startedAt{}; };
     class Tracker final
     {

@@ -28,6 +28,7 @@ int main()
     int checks = 0, failures = 0;
     const auto require = [&](bool value, const char* text) { ++checks; if (!value) { ++failures; std::cerr << "FAIL: " << text << '\n'; } };
     static_assert(!std::is_copy_constructible_v<JobScope> && !std::is_move_constructible_v<JobScope>);
+    static_assert(!std::is_copy_constructible_v<WorkScope> && !std::is_move_constructible_v<WorkScope>);
     static_assert(std::is_trivially_copyable_v<JobRecord> && std::is_trivially_copyable_v<Snapshot>);
     Tracker tracker;
     require(!tracker.Enabled() && tracker.Enqueue(0, 0).id == 0, "new observation defaults off");
@@ -92,12 +93,28 @@ int main()
     Tracker reverse; reverse.Configure(true); const auto backwards = reverse.Enqueue(0, 10);
     require(!reverse.Start(backwards, 9).accepted && reverse.GetSnapshot().invalid == 1, "backward start cannot underflow queue delay");
 
+    std::array<uint64_t, WorkKindCount> workCalls{};
+    std::array<double, WorkKindCount> workTotal{}, workMax{};
+    require(Detail::AddWork(workCalls, workTotal, workMax, 0, 5000000) &&
+        Detail::AddWork(workCalls, workTotal, workMax, 0, 3000000) &&
+        Detail::AddWork(workCalls, workTotal, workMax, 1, 2000000), "bounded work observations accept deterministic samples");
+    require(workCalls[0] == 2 && workTotal[0] == 8 && workMax[0] == 5 && workCalls[1] == 1 &&
+        workTotal[1] == 2 && workMax[1] == 2 && workCalls[2] == 0, "repeated category counts, totals and maxima remain independent");
+    require(!Detail::AddWork(workCalls, workTotal, workMax, WorkKindCount, 1) && workCalls[0] == 2,
+        "out-of-range work category cannot write fixed arrays");
+    workCalls[2] = std::numeric_limits<uint64_t>::max();
+    require(!Detail::AddWork(workCalls, workTotal, workMax, 2, 1) && workTotal[2] == 0,
+        "work call-count overflow is refused before changing totals");
+    workTotal[3] = std::numeric_limits<double>::infinity();
+    require(!Detail::AddWork(workCalls, workTotal, workMax, 3, 1) && workCalls[3] == 0,
+        "nonfinite work observation is refused");
+
     Configure(true);
     if (!GetSnapshot().available)
     {
         const auto before = GetSnapshot();
         require(!before.enabled && Enqueue().id == 0, "unsupported public profiler stays unavailable and disabled");
-        { auto job = Begin(Enqueue()); TagCurrentJob(KindRaf); job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone(); job.Finish(); }
+        { auto job = Begin(Enqueue()); WorkScope work{WorkKind::TextureNotify}; TagCurrentJob(KindRaf); job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone(); job.Finish(); work.Finish(); }
         require(GetSnapshot().enqueued == before.enqueued && GetSnapshot().completed == before.completed,
             "unsupported wrapper path creates no observations");
         Detail::RecordObserverFailure();
@@ -138,7 +155,7 @@ int main()
         snapshot.invalid == beforeThreads.invalid && snapshot.overflow == beforeThreads.overflow,
         "six workers and concurrent snapshots preserve exact counts and bounded storage");
     const auto beforeAlloc = allocations.load(); countAllocations = true;
-    { auto job = Begin(Enqueue()); TagCurrentJob(KindTextureReady); job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone(); job.Finish(); (void)GetSnapshot(); }
+    { auto job = Begin(Enqueue()); TagCurrentJob(KindTextureReady); { WorkScope work{WorkKind::TextureNotify}; WorkScope inner{WorkKind::ProgramCreate}; inner.Finish(); work.Finish(); } job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone(); job.Finish(); (void)GetSnapshot(); }
     countAllocations = false;
     require(allocations == beforeAlloc, "warm observation path allocates no heap storage");
     const auto beforeInvalid = GetSnapshot();
@@ -153,8 +170,88 @@ int main()
         const auto next = Enqueue(); require(next.parent == 0, "out-of-order finish cannot leave a dangling TLS parent");
         auto final = Begin(next); final.Finish();
     }
+    const auto findRecord = [&](uint64_t id) {
+        const auto s = GetSnapshot();
+        for (size_t i = 0; i < s.recordCount; ++i) if (s.records[i].id == id) return s.records[i];
+        JobRecord missing{}; missing.valid = false; return missing;
+    };
+    const auto nestedWork = Enqueue();
+    {
+        auto job = Begin(nestedWork);
+        {
+            WorkScope texture{WorkKind::TextureNotify};
+            std::this_thread::sleep_for(std::chrono::milliseconds{2});
+            {
+                WorkScope program{WorkKind::ProgramCreate};
+                { WorkScope provider{WorkKind::ShaderProvider}; std::this_thread::sleep_for(std::chrono::milliseconds{2}); }
+                { WorkScope initialize{WorkKind::ProgramInitialize}; std::this_thread::sleep_for(std::chrono::milliseconds{2}); }
+            }
+            { WorkScope program{WorkKind::ProgramCreate}; std::this_thread::sleep_for(std::chrono::milliseconds{2}); program.Finish(); program.Finish(); }
+        }
+        job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone();
+    }
+    auto workRecord = findRecord(nestedWork.id);
+    require(workRecord.id == nestedWork.id && workRecord.valid && workRecord.workCalls == std::array<uint64_t, WorkKindCount>{1, 2, 1, 1},
+        "distinct nested work categories and repeated observations attach to their completed job");
+    require(workRecord.workTotalMs[0] >= workRecord.workTotalMs[1] && workRecord.workTotalMs[1] >= workRecord.workMaxMs[1] &&
+        workRecord.workTotalMs[2] > 0 && workRecord.workTotalMs[3] > 0 && workRecord.totalMs >= workRecord.workTotalMs[0],
+        "inclusive nested wall durations are measured without treating categories as additive");
+    const auto workUnwind = Enqueue(); caught = false;
+    try
+    {
+        auto job = Begin(workUnwind); WorkScope work{WorkKind::TextureNotify}; WorkScope inner{WorkKind::ProgramCreate};
+        std::this_thread::sleep_for(std::chrono::milliseconds{2}); throw std::runtime_error{"work original"};
+    }
+    catch (const std::runtime_error& e) { caught = std::string{e.what()} == "work original"; }
+    workRecord = findRecord(workUnwind.id);
+    require(caught && workRecord.valid && workRecord.failed && workRecord.workCalls[0] == 1 && workRecord.workCalls[1] == 1,
+        "work destructors observe nested unwind without swallowing exception or invalidating proper lifetimes");
+    const auto overlappingWork = Enqueue();
+    {
+        auto job = Begin(overlappingWork); WorkScope outerWork{WorkKind::TextureNotify};
+        { WorkScope ambiguous{WorkKind::TextureNotify}; std::this_thread::sleep_for(std::chrono::milliseconds{2}); }
+        outerWork.Finish(); job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone();
+    }
+    workRecord = findRecord(overlappingWork.id);
+    require(!workRecord.valid && workRecord.workCalls[0] == 1, "same-category overlap fails closed without counting ambiguous inner work");
+    const auto wrongWorkOrder = Enqueue();
+    {
+        auto job = Begin(wrongWorkOrder); WorkScope outerWork{WorkKind::TextureNotify}; WorkScope innerWork{WorkKind::ProgramCreate};
+        std::this_thread::sleep_for(std::chrono::milliseconds{2}); outerWork.Finish(); innerWork.Finish();
+        job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone();
+    }
+    workRecord = findRecord(wrongWorkOrder.id);
+    require(!workRecord.valid && workRecord.workCalls[0] == 1 && workRecord.workCalls[1] == 1,
+        "out-of-order work completion invalidates and safely splices metadata chain");
+    const auto expiredOwner = Enqueue();
+    alignas(WorkScope) std::array<std::byte, sizeof(WorkScope)> workStorage{};
+    WorkScope* lateWork{};
+    {
+        auto job = Begin(expiredOwner); lateWork = ::new (workStorage.data()) WorkScope{WorkKind::TextureNotify};
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    lateWork->Finish(); lateWork->~WorkScope();
+    workRecord = findRecord(expiredOwner.id);
+    require(!workRecord.valid && workRecord.workCalls[0] == 0,
+        "job destruction detaches surviving metadata scopes without stale dereference or invented duration");
+    const auto wrongJobWork = Enqueue();
+    {
+        auto job = Begin(wrongJobWork); WorkScope work{WorkKind::TextureNotify};
+        { auto other = Begin(Enqueue()); std::this_thread::sleep_for(std::chrono::milliseconds{2}); work.Finish(); }
+    }
+    require(!findRecord(wrongJobWork.id).valid, "work cannot finish while another TLS job is current without invalidating its owner");
+    const auto beforeNoCurrent = GetSnapshot();
+    { WorkScope noJob{WorkKind::TextureNotify}; noJob.Finish(); }
+    require(GetSnapshot().invalid == beforeNoCurrent.invalid && GetSnapshot().completed == beforeNoCurrent.completed,
+        "work outside a current job is a no-op");
+    const auto beforeBadKind = GetSnapshot(); const auto badWork = Enqueue();
+    {
+        auto job = Begin(badWork); WorkScope bad{WorkKind::Count}; std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    require(!findRecord(badWork.id).valid && GetSnapshot().invalid == beforeBadKind.invalid + 1,
+        "invalid work category fails closed without indexing fixed storage");
     Configure(false); const auto disabled = GetSnapshot();
-    { auto job = Begin(Enqueue()); job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone(); }
+    { auto job = Begin(Enqueue()); WorkScope work{WorkKind::TextureNotify}; job.MarkCallbackDone(); job.MarkDrainDone(); job.MarkHandleScopeDone(); }
     require(!GetSnapshot().enabled && GetSnapshot().enqueued == disabled.enqueued && GetSnapshot().completed == disabled.completed,
         "disabled public path creates no observation or counter change");
     const auto beforeMissing = GetSnapshot(); Detail::RecordObserverFailure();

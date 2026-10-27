@@ -86,6 +86,20 @@ namespace Babylon::RuntimeDiagnostics
     void JobScope::Finish() noexcept
     {
         if (!m_active) return;
+        // Active work observers cannot outlive this metadata owner. Detach all
+        // pointers before the job object can be destroyed; invent no unfinished
+        // duration or implicit scope completion.
+        if (m_workTop)
+        {
+            Invalid();
+            for (auto* work = m_workTop; work;)
+            {
+                auto* previous = work->m_previous;
+                work->m_owner = nullptr; work->m_previous = nullptr; work->m_active = false;
+                work = previous;
+            }
+            m_workTop = nullptr; m_workActive.fill(0);
+        }
         uint64_t now = Now();
         if (now < m_times[m_lastPhase]) { Invalid(); now = m_times[m_lastPhase]; }
         m_times[4] = now; m_phaseMask |= 16;
@@ -100,8 +114,9 @@ namespace Babylon::RuntimeDiagnostics
                 if (item->m_previous == this) { item->m_previous = m_previous; break; }
         }
         m_active = false;
-        const auto record = Detail::MakeRecord(m_token, m_queuedAt, m_times, m_phaseMask, m_kindMask,
+        auto record = Detail::MakeRecord(m_token, m_queuedAt, m_times, m_phaseMask, m_kindMask,
             m_valid, std::uncaught_exceptions() > m_exceptions);
+        record.workCalls = m_workCalls; record.workTotalMs = m_workTotalMs; record.workMaxMs = m_workMaxMs;
         try { auto& state = Global(); const std::lock_guard lock{state.mutex}; state.tracker.Complete(m_token, record); }
         catch (...) { Detail::RecordObserverFailure(); }
     }
@@ -110,5 +125,33 @@ namespace Babylon::RuntimeDiagnostics
         if (!current || !current->m_active) return;
         if (bits & ~uint32_t{15}) { current->Invalid(); return; }
         current->m_kindMask |= bits;
+    }
+
+    WorkScope::WorkScope(WorkKind kind) noexcept
+    {
+        if (!enabled.load(std::memory_order_acquire) || !current || !current->m_active) return;
+        const size_t index = static_cast<size_t>(kind);
+        if (index >= WorkKindCount || current->m_workActive[index] != 0)
+        { current->Invalid(); return; }
+        m_owner = current; m_kind = index; m_started = Now(); m_previous = m_owner->m_workTop;
+        m_owner->m_workTop = this; m_owner->m_workActive[index] = 1; m_active = true;
+    }
+    WorkScope::~WorkScope() noexcept { Finish(); }
+    void WorkScope::Finish() noexcept
+    {
+        if (!m_active) return;
+        auto* owner = m_owner;
+        // The owner detaches active observers in its own Finish, so this pointer
+        // can never be used after job destruction on the supported same thread.
+        const uint64_t now = Now();
+        if (current != owner || owner->m_workTop != this || now < m_started) owner->Invalid();
+        WorkScope** link = &owner->m_workTop;
+        while (*link && *link != this) link = &(*link)->m_previous;
+        if (*link == this) *link = m_previous;
+        else owner->Invalid();
+        owner->m_workActive[m_kind] = 0;
+        if (now >= m_started && !Detail::AddWork(owner->m_workCalls, owner->m_workTotalMs,
+            owner->m_workMaxMs, m_kind, now - m_started)) owner->Invalid();
+        m_owner = nullptr; m_previous = nullptr; m_active = false;
     }
 }

@@ -6,6 +6,8 @@
 namespace Babylon::RuntimeDiagnostics
 {
     inline constexpr uint32_t KindRaf = 1, KindRafDeferred = 2, KindCommandDeferred = 4, KindTextureReady = 8;
+    enum class WorkKind : uint8_t { TextureNotify, ProgramCreate, ShaderProvider, ProgramInitialize, Count };
+    inline constexpr size_t WorkKindCount = static_cast<size_t>(WorkKind::Count);
     struct Token { uint64_t id{}, parent{}; };
     struct JobRecord
     {
@@ -13,6 +15,10 @@ namespace Babylon::RuntimeDiagnostics
         uint32_t kindMask{}, phaseMask{};
         double queuedAt{}, startedAt{}, endedAt{}, queueWaitMs{}, callbackMs{}, drainMs{}, handleScopeMs{}, executeTailMs{}, totalMs{};
         bool valid{true}, failed{};
+        // Inclusive wall spans; different categories can nest and are not additive.
+        // TextureNotify surrounds a JS call and can include its automatic microtasks.
+        std::array<uint64_t, WorkKindCount> workCalls{};
+        std::array<double, WorkKindCount> workTotalMs{}, workMaxMs{};
     };
     struct Snapshot
     {
@@ -31,6 +37,7 @@ namespace Babylon::RuntimeDiagnostics
     Snapshot GetSnapshot() noexcept;
     Token Enqueue() noexcept;
 
+    class WorkScope;
     class JobScope final
     {
     public:
@@ -47,6 +54,7 @@ namespace Babylon::RuntimeDiagnostics
         friend JobScope Begin(Token) noexcept;
         friend Token Enqueue() noexcept;
         friend void TagCurrentJob(uint32_t) noexcept;
+        friend class WorkScope;
         explicit JobScope(Token) noexcept;
         void Mark(size_t phase) noexcept;
         void Invalid() noexcept;
@@ -58,8 +66,36 @@ namespace Babylon::RuntimeDiagnostics
         size_t m_lastPhase{};
         int m_exceptions{};
         bool m_active{}, m_valid{true};
+        WorkScope* m_workTop{};
+        std::array<uint8_t, WorkKindCount> m_workActive{};
+        std::array<uint64_t, WorkKindCount> m_workCalls{};
+        std::array<double, WorkKindCount> m_workTotalMs{}, m_workMaxMs{};
     };
     // Guaranteed C++17 prvalue construction: no move, retained callback or task owner.
     JobScope Begin(Token token) noexcept;
     void TagCurrentJob(uint32_t kindBits) noexcept;
+
+    // Observation only, bound to the current thread's active job. No callbacks,
+    // shared pointers or task owners are stored. Default-off/no-current does not
+    // read the clock. Same-kind overlap, wrong finish order or outliving a job
+    // makes that job's diagnostics invalid, without changing execution semantics.
+    // Completed spans include exceptional returns; counts do not mean success.
+    class WorkScope final
+    {
+    public:
+        explicit WorkScope(WorkKind kind) noexcept;
+        ~WorkScope() noexcept;
+        WorkScope(const WorkScope&) = delete;
+        WorkScope& operator=(const WorkScope&) = delete;
+        WorkScope(WorkScope&&) = delete;
+        WorkScope& operator=(WorkScope&&) = delete;
+        void Finish() noexcept;
+    private:
+        friend class JobScope;
+        JobScope* m_owner{};
+        WorkScope* m_previous{};
+        uint64_t m_started{};
+        size_t m_kind{};
+        bool m_active{};
+    };
 }

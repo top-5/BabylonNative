@@ -1608,6 +1608,7 @@ void main() {
 
     Napi::Value NativeEngine::CreateProgram(const Napi::CallbackInfo& info)
     {
+        RuntimeDiagnostics::WorkScope programWork{RuntimeDiagnostics::WorkKind::ProgramCreate};
         const std::string vertexSource = info[0].As<Napi::String>().Utf8Value();
         const std::string fragmentSource = info[1].As<Napi::String>().Utf8Value();
         const std::vector<std::string> varyings = ReadTransformFeedbackVaryings(info, 2);
@@ -1617,12 +1618,22 @@ void main() {
         {
             if (!varyings.empty())
             {
-                program->InitializeTransformFeedback(m_shaderProvider.GetTransformFeedback(vertexSource, varyings));
+                auto provider = [&]() {
+                    RuntimeDiagnostics::WorkScope work{RuntimeDiagnostics::WorkKind::ShaderProvider};
+                    return m_shaderProvider.GetTransformFeedback(vertexSource, varyings);
+                }();
+                RuntimeDiagnostics::WorkScope work{RuntimeDiagnostics::WorkKind::ProgramInitialize};
+                program->InitializeTransformFeedback(std::move(provider));
             }
             else
             {
                 program->SetSources(vertexSource, fragmentSource);
-                program->Initialize(m_shaderProvider.Get(vertexSource, fragmentSource));
+                auto provider = [&]() {
+                    RuntimeDiagnostics::WorkScope work{RuntimeDiagnostics::WorkKind::ShaderProvider};
+                    return m_shaderProvider.Get(vertexSource, fragmentSource);
+                }();
+                RuntimeDiagnostics::WorkScope work{RuntimeDiagnostics::WorkKind::ProgramInitialize};
+                program->Initialize(std::move(provider));
             }
         }
         catch (const std::exception& ex)
@@ -2167,6 +2178,9 @@ void main() {
             })
             .then(m_runtimeScheduler, *m_cancellationSource, [dataRef{Napi::Persistent(data)}, onSuccessRef{Napi::Persistent(onSuccess)}, onErrorRef{Napi::Persistent(onError)}, cancellationSource{m_cancellationSource}](arcana::expected<void, std::exception_ptr> result) {
                 RuntimeDiagnostics::TagCurrentJob(RuntimeDiagnostics::KindTextureReady);
+                // Includes the called JS notification and any VM work that runs
+                // before Call returns. These nested wall spans are not additive.
+                RuntimeDiagnostics::WorkScope notification{RuntimeDiagnostics::WorkKind::TextureNotify};
                 if (result.has_error())
                 {
                     onErrorRef.Call({});
