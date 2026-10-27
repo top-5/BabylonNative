@@ -10,7 +10,7 @@ namespace Babylon
     VertexBuffer::VertexBuffer(Graphics::DeviceContext& deviceContext, gsl::span<const uint8_t> bytes, bool dynamic)
         : m_deviceContext{deviceContext}
         , m_deviceId{m_deviceContext.GetDeviceId()}
-        , m_bytes{bytes.data(), bytes.data() + bytes.size()}
+        , m_bytes{bytes.empty() ? std::vector<uint8_t>{} : std::vector<uint8_t>{bytes.data(), bytes.data() + bytes.size()}}
         , m_dynamic{dynamic}
     {
     }
@@ -85,7 +85,10 @@ namespace Babylon
                 throw std::runtime_error{"Cannot update vertex buffer due to buffer overflow"};
             }
 
-            std::memcpy(m_bytes.data() + byteOffset, bytes.data(), bytes.size());
+            if (!bytes.empty())
+            {
+                std::memcpy(m_bytes.data() + byteOffset, bytes.data(), bytes.size());
+            }
         }
     }
 

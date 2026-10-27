@@ -69,6 +69,10 @@ namespace Babylon
 
         uint32_t ReadUnsignedInteger(const Napi::Value& value, const char* name, uint32_t maximum, uint32_t minimum = 0, bool truncate = false)
         {
+            if (!value.IsNumber())
+            {
+                throw Napi::TypeError::New(value.Env(), std::string{name} + " must be a number");
+            }
             double number = value.As<Napi::Number>().DoubleValue();
             if (truncate)
             {
@@ -80,6 +84,24 @@ namespace Babylon
                     std::to_string(minimum) + " and " + std::to_string(maximum));
             }
             return static_cast<uint32_t>(number);
+        }
+
+        gsl::span<const uint8_t> ReadArrayBufferSpan(const Napi::ArrayBuffer& buffer, const Napi::Value& offsetValue, const Napi::Value& lengthValue)
+        {
+            if (!buffer.IsArrayBuffer())
+            {
+                throw Napi::TypeError::New(buffer.Env(), "Buffer source must be an ArrayBuffer");
+            }
+            const uint32_t offset = ReadUnsignedInteger(offsetValue, "Buffer source offset", UINT32_MAX);
+            const uint32_t length = ReadUnsignedInteger(lengthValue, "Buffer source length", UINT32_MAX);
+            const size_t capacity = buffer.ByteLength();
+            if (offset > capacity || length > capacity - offset)
+            {
+                throw Napi::RangeError::New(buffer.Env(), "Buffer source offset and length exceed the ArrayBuffer");
+            }
+            const auto* bytes = static_cast<const uint8_t*>(buffer.Data());
+            // Empty ArrayBuffers may have a null data pointer; do not perform even +0 on it.
+            return gsl::make_span(offset == 0 ? bytes : bytes + offset, length);
         }
 
         namespace TextureSampling
@@ -1363,11 +1385,10 @@ namespace Babylon
         using namespace Plugins::NativeEngine::Detail;
         ResourceScope timing{Counter(ResourcePhase::VertexBufferCreate), 0, CommandTimingEnabled()};
         const Napi::ArrayBuffer dataBuffer = info[0].As<Napi::ArrayBuffer>();
-        const uint32_t dataByteOffset = info[1].As<Napi::Number>().Uint32Value();
-        const uint32_t dataByteLength = info[2].As<Napi::Number>().Uint32Value();
+        const auto bytes = ReadArrayBufferSpan(dataBuffer, info[1], info[2]);
         const bool dynamic = info[3].As<Napi::Boolean>().Value();
 
-        VertexBuffer* vertexBuffer = new VertexBuffer(m_deviceContext, gsl::make_span(static_cast<uint8_t*>(dataBuffer.Data()) + dataByteOffset, dataByteLength), dynamic);
+        VertexBuffer* vertexBuffer = new VertexBuffer(m_deviceContext, bytes, dynamic);
         auto result = Napi::Pointer<VertexBuffer>::Create(info.Env(), vertexBuffer, Napi::NapiPointerDeleter(vertexBuffer));
         timing.Succeed(); return result;
     }
@@ -1433,9 +1454,8 @@ namespace Babylon
     {
         VertexBuffer* vertexBuffer = info[0].As<Napi::Pointer<VertexBuffer>>().Get();
         const Napi::ArrayBuffer dataBuffer = info[1].As<Napi::ArrayBuffer>();
-        const uint32_t dataByteOffset = info[2].As<Napi::Number>().Uint32Value();
-        const uint32_t dataByteLength = info[3].As<Napi::Number>().Uint32Value();
-        const uint32_t vertexByteOffset = info[4].IsUndefined() ? 0 : info[4].As<Napi::Number>().Uint32Value();
+        const auto bytes = ReadArrayBufferSpan(dataBuffer, info[2], info[3]);
+        const uint32_t vertexByteOffset = info[4].IsUndefined() ? 0 : ReadUnsignedInteger(info[4], "Vertex buffer target offset", UINT32_MAX);
 
         // Queued draws snapshot instance data when decoded, so drain them
         // before updating. Keep this outside the update error handler so
@@ -1447,7 +1467,7 @@ namespace Babylon
 
         try
         {
-            vertexBuffer->Update(gsl::make_span(static_cast<uint8_t*>(dataBuffer.Data()) + dataByteOffset, dataByteLength), vertexByteOffset);
+            vertexBuffer->Update(bytes, vertexByteOffset);
         }
         catch (std::exception& ex)
         {
