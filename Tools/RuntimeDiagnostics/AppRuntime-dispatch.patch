@@ -1,0 +1,54 @@
+--- a/Core/AppRuntime/Source/AppRuntime.cpp
++++ b/Core/AppRuntime/Source/AppRuntime.cpp
+@@ -1,4 +1,8 @@
+ #include "AppRuntime.h"
++
++#ifdef BABYLON_RUNTIME_JOB_DIAGNOSTICS
++#include <Babylon/RuntimeJobDiagnostics.h>
++#endif
+ 
+ #include "DelayedTaskScheduler.h"
+ 
+@@ -128,6 +132,35 @@
+ 
+     void AppRuntime::Dispatch(Dispatchable<void(Napi::Env)> func)
+     {
++#ifdef BABYLON_RUNTIME_JOB_DIAGNOSTICS
++        const auto token = RuntimeDiagnostics::Enqueue();
++        m_impl->Append([this, func{std::move(func)}, token](Napi::Env env) mutable {
++            auto job = RuntimeDiagnostics::Begin(token);
++            Execute([this, env, func{std::move(func)}, &job]() mutable {
++                {
++                    Napi::HandleScope scope{env};
++                    try
++                    {
++                        func(env);
++                    }
++                    catch (const Napi::Error& error)
++                    {
++                        m_options.UnhandledExceptionHandler(error);
++                    }
++                    catch (...)
++                    {
++                        assert(false);
++                        std::abort();
++                    }
++                    job.MarkCallbackDone();
++                    DrainMicrotasks(env);
++                    job.MarkDrainDone();
++                }
++                job.MarkHandleScopeDone();
++            });
++            job.Finish();
++        });
++#else
+         m_impl->Append([this, func{std::move(func)}](Napi::Env env) mutable {
+             Execute([this, env, func{std::move(func)}]() mutable {
+                 // Some engines (notably Hermes) require an open NAPI handle
+@@ -159,5 +192,6 @@
+                 DrainMicrotasks(env);
+             });
+         });
++#endif
+     }
+ }

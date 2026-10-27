@@ -12,6 +12,7 @@ namespace Babylon::Graphics
     struct FrameScopeRecord
     {
         uint64_t identity{};
+        uint64_t acquiredAtNs{};
         FrameScopeKind kind{FrameScopeKind::Other};
         uint64_t ageNs{}, phaseMask{}, acquiredToJsNs{}, callbackNs{}, deferredWaitNs{}, afterDeferredNs{};
     };

@@ -14,6 +14,7 @@ add_library(Embedding ${SOURCES})
 warnings_as_errors(Embedding)
 
 target_include_directories(Embedding PUBLIC "${EMBEDDING_SHARED_INCLUDE_ROOT}")
+target_link_libraries(Embedding PUBLIC RuntimeDiagnostics)
 
 # Always-on dependencies. The Embedding layer formalizes the canonical
 # Babylon Native setup, so the standard polyfills (Blob / Console / Fetch /

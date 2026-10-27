@@ -32,6 +32,7 @@ int main()
         "deferred callback entry is not final scope release");
     tracker.Release(command, 350);
     snapshot = tracker.Snapshot();
+    require(snapshot.longest.acquiredAtNs == 100, "scope exposes its monotonic acquisition for process-local job intersection");
     require(snapshot.coverageComplete && snapshot.released == 1 && snapshot.longest.identity == command &&
         snapshot.longest.kind == FrameScopeKind::Command && snapshot.longest.ageNs == 250,
         "command age ends at actual final release");

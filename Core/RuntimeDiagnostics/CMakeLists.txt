@@ -1,0 +1,7 @@
+add_library(RuntimeDiagnostics STATIC Source/RuntimeJobDiagnostics.cpp)
+target_compile_features(RuntimeDiagnostics PRIVATE cxx_std_17)
+target_include_directories(RuntimeDiagnostics PUBLIC Include)
+target_compile_definitions(RuntimeDiagnostics PRIVATE BABYLON_RUNTIME_DIAGNOSTICS_SUPPORTED=$<BOOL:${BABYLON_NATIVE_RUNTIME_JOB_DIAGNOSTICS}>)
+warnings_as_errors(RuntimeDiagnostics)
+set_property(TARGET RuntimeDiagnostics PROPERTY FOLDER Core)
+set_property(TARGET RuntimeDiagnostics PROPERTY POSITION_INDEPENDENT_CODE ON)

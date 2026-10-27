@@ -38,6 +38,7 @@ foreach(BACKEND dxbc dxil essl glsl metal spirv)
 endforeach()
 
 add_library(NativeEngine ${SOURCES} ${SHADERS})
+target_link_libraries(NativeEngine PRIVATE RuntimeDiagnostics)
 
 if(SHADERC_PATH AND NOT IOS AND NOT VISIONOS AND NOT ANDROID)
     add_bgfx_shader("${CMAKE_CURRENT_SOURCE_DIR}/Source/Shaders/cs_instance_repack.sc" "")

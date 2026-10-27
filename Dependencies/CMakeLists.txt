@@ -254,6 +254,22 @@ endif()
 # JsRuntimeHost
 # --------------------------------------------------
 FetchContent_MakeAvailable_With_Message(JsRuntimeHost)
+add_subdirectory("${BabylonNative_SOURCE_DIR}/Core/RuntimeDiagnostics" "${BabylonNative_BINARY_DIR}/Core/RuntimeDiagnostics")
+if(BABYLON_NATIVE_RUNTIME_JOB_DIAGNOSTICS AND BUILD_SHARED_LIBS)
+    message(FATAL_ERROR "Runtime job diagnostics currently requires static SDK targets.")
+endif()
+set(_runtime_diag_source "${JsRuntimeHost_SOURCE_DIR}/Core/AppRuntime/Source/AppRuntime.cpp")
+file(READ "${_runtime_diag_source}" _runtime_diag_text)
+if(BABYLON_NATIVE_RUNTIME_JOB_DIAGNOSTICS OR _runtime_diag_text MATCHES "BABYLON_RUNTIME_JOB_DIAGNOSTICS")
+    include("${BabylonNative_SOURCE_DIR}/Tools/RuntimeDiagnostics/ApplyRuntimeDiagnostics.cmake")
+    apply_runtime_diagnostics("${JsRuntimeHost_SOURCE_DIR}" "${BABYLON_NATIVE_RUNTIME_JOB_DIAGNOSTICS}")
+endif()
+if(BABYLON_NATIVE_RUNTIME_JOB_DIAGNOSTICS)
+    target_link_libraries(AppRuntime PRIVATE RuntimeDiagnostics)
+    target_compile_definitions(AppRuntime PRIVATE BABYLON_RUNTIME_JOB_DIAGNOSTICS=1)
+endif()
+unset(_runtime_diag_source)
+unset(_runtime_diag_text)
 
 # Two JsRuntimeHost targets cannot be built without RTTI:
 #   v8inspector - includes asio, whose headers use typeid() unconditionally

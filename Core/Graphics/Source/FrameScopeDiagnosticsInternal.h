@@ -83,6 +83,7 @@ namespace Babylon::Graphics::Detail
             {
                 FrameScopeRecord record{};
                 record.identity = entry->identity;
+                record.acquiredAtNs = entry->times[0];
                 record.kind = entry->kind;
                 record.ageNs = nowNs - entry->times[0];
                 record.phaseMask = entry->phaseMask;
