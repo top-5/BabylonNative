@@ -3,6 +3,7 @@
 #include "BgfxCallback.h"
 #include <bx/allocator.h>
 #include "continuation_scheduler.h"
+#include <Babylon/Graphics/FrameScopeDiagnostics.h>
 
 #include <arcana/threading/task.h>
 
@@ -59,11 +60,14 @@ namespace Babylon::Graphics
 
         FrameCompletionScope(FrameCompletionScope&&) noexcept;
         ~FrameCompletionScope();
+        // Diagnostic milestone only: never changes the ownership or pending count.
+        void MarkPhase(FrameScopePhase phase);
 
     private:
         friend class DeviceContext;
-        FrameCompletionScope(DeviceImpl&);
+        FrameCompletionScope(DeviceImpl&, FrameScopeKind);
         DeviceImpl* m_impl;
+        uint64_t m_diagnosticIdentity{};
     };
 
     class DeviceContext
@@ -91,7 +95,7 @@ namespace Babylon::Graphics
         // scope into an m_runtime.Dispatch lambda; callers needing only a
         // single phase can hold it stack-scoped. See the class comment on
         // FrameCompletionScope above for the two patterns.
-        FrameCompletionScope AcquireFrameCompletionScope();
+        FrameCompletionScope AcquireFrameCompletionScope(FrameScopeKind kind = FrameScopeKind::Other);
 
         // Active encoder for the current frame. Managed by DeviceImpl in
         // StartRenderingCurrentFrame/FinishRenderingCurrentFrame.

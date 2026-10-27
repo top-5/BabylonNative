@@ -3,6 +3,7 @@
 #include <Babylon/Graphics/BgfxCallback.h>
 #include <Babylon/Graphics/Device.h>
 #include <Babylon/Graphics/DeviceContext.h>
+#include "FrameScopeDiagnosticsInternal.h"
 
 #include <arcana/containers/ticketed_collection.h>
 #include <arcana/threading/dispatcher.h>
@@ -124,8 +125,9 @@ namespace Babylon::Graphics
         bool ForceMidFrameFlush();
 
         // Frame completion scope support
-        void IncrementPendingFrameScopes();
-        void DecrementPendingFrameScopes();
+        uint64_t IncrementPendingFrameScopes(FrameScopeKind kind);
+        void DecrementPendingFrameScopes(uint64_t diagnosticIdentity);
+        void MarkFrameScope(uint64_t diagnosticIdentity, FrameScopePhase phase);
 
         // Active encoder for the current frame.
         void SetActiveEncoder(bgfx::Encoder* encoder);
@@ -313,6 +315,8 @@ namespace Babylon::Graphics
         std::condition_variable m_frameSyncCV{};
         int m_pendingFrameScopes{0};
         bool m_frameBlocked{true};
+        Detail::FrameScopeTracker m_frameScopeTracker{}; // protected by the existing frame-sync mutex
+        bool m_untrackedScopesAtTimingStart{};
 
         // Mid-frame view-flush handshake (guarded by m_frameSyncMutex):
         //   - JS thread sets m_flushRequested and waits on m_flushCompleteCV.

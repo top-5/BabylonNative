@@ -42,29 +42,35 @@ namespace Babylon::Graphics
         return m_graphicsImpl.FrameStartScheduler();
     }
 
-    FrameCompletionScope::FrameCompletionScope(DeviceImpl& impl)
+    FrameCompletionScope::FrameCompletionScope(DeviceImpl& impl, FrameScopeKind kind)
         : m_impl{&impl}
     {
-        m_impl->IncrementPendingFrameScopes();
+        m_diagnosticIdentity = m_impl->IncrementPendingFrameScopes(kind);
     }
 
     FrameCompletionScope::FrameCompletionScope(FrameCompletionScope&& other) noexcept
-        : m_impl{other.m_impl}
+        : m_impl{other.m_impl}, m_diagnosticIdentity{other.m_diagnosticIdentity}
     {
         other.m_impl = nullptr;
+        other.m_diagnosticIdentity = 0;
     }
 
     FrameCompletionScope::~FrameCompletionScope()
     {
         if (m_impl)
         {
-            m_impl->DecrementPendingFrameScopes();
+            m_impl->DecrementPendingFrameScopes(m_diagnosticIdentity);
         }
     }
 
-    FrameCompletionScope DeviceContext::AcquireFrameCompletionScope()
+    void FrameCompletionScope::MarkPhase(FrameScopePhase phase)
     {
-        return FrameCompletionScope{m_graphicsImpl};
+        if (m_impl && m_diagnosticIdentity) m_impl->MarkFrameScope(m_diagnosticIdentity, phase);
+    }
+
+    FrameCompletionScope DeviceContext::AcquireFrameCompletionScope(FrameScopeKind kind)
+    {
+        return FrameCompletionScope{m_graphicsImpl, kind};
     }
 
     void DeviceContext::SetActiveEncoder(bgfx::Encoder* encoder)

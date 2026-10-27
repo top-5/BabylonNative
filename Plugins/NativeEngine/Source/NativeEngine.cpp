@@ -4074,8 +4074,10 @@ void main() {
         // requires copy-constructibility.
         {
             ResourceScope timing{Counter(ResourcePhase::CommandScopeDispatch), 0, timingEnabled};
-            m_runtime.Dispatch([scope = std::make_shared<Graphics::FrameCompletionScope>(
-                m_deviceContext.AcquireFrameCompletionScope())](auto) {});
+            auto completionScope = std::make_shared<Graphics::FrameCompletionScope>(
+                m_deviceContext.AcquireFrameCompletionScope(Graphics::FrameScopeKind::Command));
+            completionScope->MarkPhase(Graphics::FrameScopePhase::DeferredQueued);
+            m_runtime.Dispatch([scope = std::move(completionScope)](auto) { scope->MarkPhase(Graphics::FrameScopePhase::DeferredStarted); });
             timing.Succeed();
         }
 
@@ -4436,10 +4438,11 @@ void main() {
 				  m_runtimeScheduler
 				, *m_cancellationSource
 				, [this
-					, frameScope{std::make_shared<Graphics::FrameCompletionScope>(m_deviceContext.AcquireFrameCompletionScope())}
+					, frameScope{std::make_shared<Graphics::FrameCompletionScope>(m_deviceContext.AcquireFrameCompletionScope(Graphics::FrameScopeKind::Raf))}
 					, cancellationSource{m_cancellationSource}
 				  ]()
 			{
+                frameScope->MarkPhase(Graphics::FrameScopePhase::JsStarted);
                 m_requestAnimationFrameCallbacksScheduled = false;
 
                 arcana::trace_region scheduleRegion{"NativeEngine::ScheduleRequestAnimationFrameCallbacks invoke JS callbacks"};
@@ -4454,11 +4457,13 @@ void main() {
                     timing.Succeed();
                 }
 
+                frameScope->MarkPhase(Graphics::FrameScopePhase::CallbackReturned);
+                frameScope->MarkPhase(Graphics::FrameScopePhase::DeferredQueued);
                 // Defer scope release to next dispatch cycle. The shared_ptr captured by
                 // the Dispatch lambda is the last reference — when that lambda runs and
                 // returns, the scope is destroyed, decrementing the counter and allowing
                 // FinishRenderingCurrentFrame to proceed.
-                m_runtime.Dispatch([prevent_frame = frameScope](auto) {});
+                m_runtime.Dispatch([prevent_frame = frameScope](auto) { prevent_frame->MarkPhase(Graphics::FrameScopePhase::DeferredStarted); });
             }).then(arcana::inline_scheduler, *m_cancellationSource, [this, cancellationSource{m_cancellationSource}](const arcana::expected<void, std::exception_ptr>& result) {
                 if (!cancellationSource->cancelled() && result.has_error())
                 {

@@ -3,6 +3,7 @@ set(SOURCES
     "Include/RendererType/${GRAPHICS_API}/Babylon/Graphics/RendererType.h"
     "Include/Shared/Babylon/Graphics/Device.h"
     "Include/Shared/Babylon/Graphics/FrameTimings.h"
+    "Include/Shared/Babylon/Graphics/FrameScopeDiagnostics.h"
     "InternalInclude/Babylon/Graphics/BgfxCallback.h"
     "InternalInclude/Babylon/Graphics/continuation_scheduler.h"
     "InternalInclude/Babylon/Graphics/DeviceContext.h"
@@ -16,6 +17,7 @@ set(SOURCES
     "Source/DeviceContext.cpp"
     "Source/DeviceImpl.cpp"
     "Source/DeviceImpl.h"
+    "Source/FrameScopeDiagnosticsInternal.h"
     "Source/DeviceImpl_${BABYLON_NATIVE_PLATFORM}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}"
     "Source/DeviceImpl_${GRAPHICS_API}.${BABYLON_NATIVE_PLATFORM_IMPL_EXT}"
     "Source/Texture.cpp")
@@ -116,6 +118,7 @@ endif()
 add_library(GraphicsDeviceContext INTERFACE)
 
 target_include_directories(GraphicsDeviceContext
+    INTERFACE "Include/Shared"
     INTERFACE "InternalInclude"
     INTERFACE "InternalInclude/${BABYLON_NATIVE_PLATFORM}")
 

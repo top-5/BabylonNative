@@ -380,7 +380,9 @@ namespace Babylon::Graphics
     void DeviceImpl::SetFrameTimingEnabled(bool enabled)
     {
         ASSERT_THREAD_AFFINITY(m_renderThreadAffinity);
+        const std::lock_guard lock{m_frameSyncMutex};
         m_frameTimingEnabled = enabled;
+        m_untrackedScopesAtTimingStart = enabled && m_pendingFrameScopes != 0;
         m_frameTimings = {};
     }
 
@@ -416,6 +418,8 @@ namespace Babylon::Graphics
         // Open the gate: allow JS thread to acquire FrameCompletionScopes and use the encoder.
         {
             std::lock_guard lock{m_frameSyncMutex};
+            if (m_frameTimingEnabled) m_frameScopeTracker.BeginFrame();
+            m_untrackedScopesAtTimingStart = false;
             m_frameBlocked = false;
         }
         m_frameSyncCV.notify_all();
@@ -481,6 +485,11 @@ namespace Babylon::Graphics
                 break;
             }
             m_frameBlocked = true;
+            if (m_frameTimingEnabled)
+            {
+                m_frameTimings.scopes = m_frameScopeTracker.Snapshot();
+                if (m_untrackedScopesAtTimingStart) m_frameTimings.scopes.coverageComplete = false;
+            }
         }
         m_frameTimings.finishGateNs = mark();
 
@@ -553,23 +562,40 @@ namespace Babylon::Graphics
     // Called by FrameCompletionScope constructor (on any thread).
     // Blocks if the gate is closed (m_frameBlocked), meaning bgfx::frame() is running
     // or no frame has started yet. Once unblocked, increments the scope counter.
-    void DeviceImpl::IncrementPendingFrameScopes()
+    namespace
+    {
+        uint64_t FrameScopeNow() noexcept
+        {
+            return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+    }
+
+    uint64_t DeviceImpl::IncrementPendingFrameScopes(FrameScopeKind kind)
     {
         std::unique_lock lock{m_frameSyncMutex};
         m_frameSyncCV.wait(lock, [this] { return !m_frameBlocked; });
         m_pendingFrameScopes++;
+        return m_frameTimingEnabled ? m_frameScopeTracker.Acquire(kind, FrameScopeNow()) : 0;
     }
 
     // Called by FrameCompletionScope destructor (on any thread).
     // Decrements the scope counter and wakes the main thread, which may be waiting
     // in FinishRenderingCurrentFrame for all scopes to be released.
-    void DeviceImpl::DecrementPendingFrameScopes()
+    void DeviceImpl::DecrementPendingFrameScopes(uint64_t diagnosticIdentity)
     {
         {
             std::lock_guard lock{m_frameSyncMutex};
+            if (diagnosticIdentity) m_frameScopeTracker.Release(diagnosticIdentity, FrameScopeNow());
             m_pendingFrameScopes--;
         }
         m_frameSyncCV.notify_all();
+    }
+
+    void DeviceImpl::MarkFrameScope(uint64_t identity, FrameScopePhase phase)
+    {
+        const std::lock_guard lock{m_frameSyncMutex};
+        m_frameScopeTracker.Mark(identity, phase, FrameScopeNow());
     }
 
     void DeviceImpl::SetActiveEncoder(bgfx::Encoder* encoder)

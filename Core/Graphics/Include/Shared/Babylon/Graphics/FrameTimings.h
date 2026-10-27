@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <Babylon/Graphics/FrameScopeDiagnostics.h>
 
 namespace Babylon::Graphics
 {
@@ -13,5 +14,6 @@ namespace Babylon::Graphics
         // The gate includes mutex/CV wait and any mid-frame flush. A long gate is
         // not proof of animation cost: command continuations/JS backlog also hold scopes.
         uint64_t midFrameFlushes{};
+        FrameScopeSnapshot scopes{};
     };
 }
