@@ -1,4 +1,9 @@
 #include "DeviceImpl.h"
+#if defined(_WIN32)
+#include <dxgi1_6.h>
+#include <wrl/client.h>
+#pragma comment(lib, "dxgi.lib")
+#endif
 
 #include <Babylon/Graphics/DeviceQueries.h>
 #include <Babylon/Graphics/Platform.h>
@@ -75,6 +80,32 @@ namespace Babylon::Graphics
             }
 #endif
         }
+
+#if defined(_WIN32)
+        // Opt-in adapter preference. On hybrid hosts (an integrated GPU driving the
+        // display plus a discrete GPU, or a Remote Desktop session) bgfx otherwise
+        // takes DXGI adapter 0. BABYLON_NATIVE_GPU_PREFERENCE=high-performance asks
+        // DXGI for the high-performance adapter and pins bgfx to its vendor/device.
+        {
+            char* preference = nullptr;
+            size_t preferenceLen = 0;
+            if (_dupenv_s(&preference, &preferenceLen, "BABYLON_NATIVE_GPU_PREFERENCE") == 0 && preference != nullptr &&
+                std::strcmp(preference, "high-performance") == 0)
+            {
+                Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
+                Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+                DXGI_ADAPTER_DESC1 desc{};
+                if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) &&
+                    SUCCEEDED(factory->EnumAdapterByGpuPreference(0, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter))) &&
+                    SUCCEEDED(adapter->GetDesc1(&desc)) && (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0)
+                {
+                    init.vendorId = static_cast<uint16_t>(desc.VendorId);
+                    init.deviceId = static_cast<uint16_t>(desc.DeviceId);
+                }
+            }
+            free(preference);
+        }
+#endif
 
         // Use the noop renderer if the configuration has no window and no size.
         if (config.Window == WindowT{} && config.Width == 0 && config.Height == 0)
