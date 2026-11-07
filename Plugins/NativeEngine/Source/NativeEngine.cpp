@@ -4078,7 +4078,8 @@ void main() {
         m_commandStream = Napi::ObjectWrap<NativeDataStream>::Unwrap(jsCommandStream.Get("_nativeDataStream").As<Napi::Object>());
     }
 
-    void NativeEngine::SubmitCommands(const Napi::CallbackInfo& info)
+    // Setup allocations must be translated before leaving this JS callback too.
+    void NativeEngine::SubmitCommands(const Napi::CallbackInfo& info) try
     {
         using namespace Plugins::NativeEngine::Detail;
         const bool timingEnabled = CommandTimingEnabled();
@@ -4100,7 +4101,7 @@ void main() {
         // count > 0 and remains protected from a concurrent
         // FinishRenderingCurrentFrame.
         //
-        // Dispatching at the top (before the try block) also makes the
+        // Dispatching before command execution also makes the
         // coverage exception-safe — if the command stream throws, the lambda
         // is already queued so the scope still survives to the next dispatch
         // cycle.
@@ -4120,19 +4121,20 @@ void main() {
             timing.Succeed();
         }
 
-        try
+        ResourceScope timing{Counter(ResourcePhase::CommandExecute), 0, timingEnabled};
+        while (reader.CanRead())
         {
-            ResourceScope timing{Counter(ResourcePhase::CommandExecute), 0, timingEnabled};
-            while (reader.CanRead())
-            {
-                std::invoke(reader.ReadPointer<CommandFunctionPointerT>(), this, reader);
-            }
-            timing.Succeed();
+            std::invoke(reader.ReadPointer<CommandFunctionPointerT>(), this, reader);
         }
-        catch (const std::exception& exception)
-        {
-            throw Napi::Error::New(info.Env(), exception);
-        }
+        timing.Succeed();
+    }
+    catch (const Napi::Error&)
+    {
+        throw;
+    }
+    catch (const std::exception& exception)
+    {
+        throw Napi::Error::New(info.Env(), exception);
     }
     void NativeEngine::PopulateFrameStats(const Napi::CallbackInfo& info)
     {

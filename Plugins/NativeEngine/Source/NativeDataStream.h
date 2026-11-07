@@ -191,13 +191,25 @@ namespace Babylon
 
         void WriteBuffer(const Napi::CallbackInfo& info)
         {
-            assert(!m_locked); // Cannot write bytes while the stream is locked for reading.
+            try
+            {
+                assert(!m_locked); // Cannot write bytes while the stream is locked for reading.
 
-            const auto& buffer = info[0].As<Napi::ArrayBuffer>();
-            const auto& length = info[1].ToNumber().Uint32Value();
+                const auto& buffer = info[0].As<Napi::ArrayBuffer>();
+                const auto& length = info[1].ToNumber().Uint32Value();
 
-            auto span = gsl::make_span(reinterpret_cast<uint32_t*>(buffer.Data()), static_cast<ptrdiff_t>(length));
-            m_buffer.insert(m_buffer.end(), span.begin(), span.end());
+                auto span = gsl::make_span(reinterpret_cast<uint32_t*>(buffer.Data()), static_cast<ptrdiff_t>(length));
+                m_buffer.insert(m_buffer.end(), span.begin(), span.end());
+            }
+            catch (const Napi::Error&)
+            {
+                throw;
+            }
+            catch (const std::exception& exception)
+            {
+                // Translate while this native callback is still on the JS stack.
+                throw Napi::Error::New(info.Env(), exception);
+            }
         }
 
         Reader GetReader()
